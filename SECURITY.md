@@ -1,65 +1,137 @@
 # Security
 
-## Threat Model
+## Security posture
 
-Safe Exec is designed to reduce accidental or low-friction harmful actions initiated from inside VS Code, especially by:
-
-- AI coding agents
-- extension automation
-- tasks and command wrappers
-- users moving quickly through risky prompts
-
-It is most useful against:
-
-- destructive terminal commands
-- sensitive command execution routed through Safe Exec wrappers
-- large or suspicious editor changes
-
-## What Safe Exec Does
-
-- detects risky terminal commands with regex-based matching
-- attempts to interrupt and dispose a terminal before asking to replay
-- requires approval for selected proxy and wrapped VS Code commands
-- rolls back suspicious edits and only reapplies them on approval
-- logs decisions and failures to an output channel
-
-## What Safe Exec Cannot Guarantee
+Safe Exec is a best-effort approval and review layer for risky activity inside VS Code. It is meant to reduce surprise and make harmful actions slower and more visible.
 
 Safe Exec is not:
 
 - a sandbox
-- a hypervisor
-- an OS security boundary
-- a complete extension isolation layer
-- a guarantee that no risky command ever begins running
+- a security boundary
+- a pre-execution enforcement layer
+- a guarantee that a risky action never begins
+- a guarantee that all VS Code commands or edits are intercepted
 
-Important limitations:
+The extension is intentionally honest about these limits in code, docs, and UI.
 
-- terminal interception often happens after execution has already started
-- `onDidWriteTerminalData` may not exist and is heuristic when present
-- VS Code built-in commands are not transparently replaced
-- edit interception is post-change and therefore rollback-based
-- fresh replay terminals may not match original shell state, environment, or cwd exactly
+## Protected surfaces
 
-## Likely Attack Vectors
+### Terminal commands
 
-- commands launched outside VS Code’s integrated terminal
+Safe Exec uses stable shell-integration APIs to inspect command text after VS Code reports a shell execution start event.
+
+If a command matches:
+
+- `allowedCommands`, it is ignored
+- `confirmationCommands`, approval is required
+- `dangerousCommands`, approval is required with a higher risk label
+
+Safe Exec then tries to interrupt and dispose the original terminal and replays the command only after approval. Replay uses the best context VS Code exposes, but it still runs in a fresh terminal.
+
+### Suspicious edits
+
+Safe Exec watches text-document change events, which are post-change. It snapshots file contents, rolls back suspicious edits, shows a real diff review, and reapplies only the captured change if approved.
+
+### Protected commands
+
+Safe Exec protects command execution only through explicit Safe Exec proxy and wrapper commands. It does not claim transparent protection for arbitrary raw built-in commands.
+
+## Honest boundaries
+
+### Terminal replay is best effort
+
+Even when Safe Exec works as designed:
+
+- the original command may already have started
+- the original process may perform side effects before interruption lands
+- the original terminal may fail to stop cleanly
+- the replay terminal may not match the original shell state
+- replay may fall back from shell integration to `sendText(...)`
+- `cwd` may be unknown
+
+Safe Exec surfaces degraded replay context in the approval dialog and records it in audit history.
+
+### Edit review is rollback based
+
+Because VS Code exposes text changes after they happen, Safe Exec cannot promise true pre-edit approval. The safety model is:
+
+1. detect a suspicious edit
+2. restore the previous snapshot
+3. ask for approval
+4. reapply the captured ranges if safe
+
+If the document changes while approval is pending, Safe Exec keeps the rollback and warns instead of overwriting the newer content.
+
+### Protected-command coverage is explicit
+
+Coverage depends on using Safe Exec proxy commands or `safeExec.runProtectedCommand`.
+
+Common bypasses include:
+
+- a keybinding that still targets the raw built-in command
+- another extension that invokes the raw built-in command directly
+- commands that Safe Exec has not been wired to proxy
+
+The onboarding flow and keybinding inspection are there to make this limitation visible, not to hide it.
+
+## Workspace Trust
+
+Safe Exec integrates with Workspace Trust, but Workspace Trust is not treated as a security boundary.
+
+In practice:
+
+- Safe Exec can still show approval prompts and inspect edits in untrusted workspaces where VS Code allows it
+- Safe Exec records trust state transitions in local audit history
+- Safe Exec status UI explains whether the current workspace is trusted or untrusted
+
+Workspace Trust can reduce some VS Code behavior. It does not isolate the shell, other extensions, or the host operating system.
+
+## Audit history and logging
+
+Safe Exec records local per-workspace history for events such as:
+
+- `intercepted`
+- `interrupted`
+- `approved`
+- `replayed`
+- `replay-degraded`
+- `denied`
+- `failed-to-stop`
+- `failed`
+- `conflict`
+- `status`
+
+Important limits:
+
+- audit history is stored in local extension state
+- it is not tamper-proof
+- it is not a system audit log
+- it should not be treated as a complete forensic record
+
+The output channel also emits structured JSON log lines for debugging and review.
+
+## Known bypasses
+
+Safe Exec does not reliably cover:
+
+- commands launched outside VS Code's integrated terminal
+- terminals without usable shell integration
 - extensions spawning child processes directly through Node APIs
-- terminals without working shell integration
-- scripts that perform damage before interruption lands
-- direct filesystem mutation that never surfaces as a normal text-document edit
-- malicious or compromised extensions that intentionally bypass Safe Exec flows
+- raw built-in VS Code commands that are not routed through Safe Exec proxies
+- direct filesystem mutation that never appears as a normal text-document edit
+- non-text file changes
+- malicious extensions that intentionally avoid Safe Exec flows
 
-## Residual Risk
+## Residual risk
 
-Even when Safe Exec detects a risky action, damage may already have started. The extension is a friction layer, not a hard block. It should be paired with:
+Residual risk remains even when Safe Exec prompts correctly. Users should still rely on:
 
-- least-privilege system accounts
-- container or VM isolation for risky automation
-- source control protections
+- least-privilege local accounts
+- containers or VMs for risky automation
+- repository protections and review gates
 - backups and recovery plans
-- careful extension trust decisions
+- careful extension selection and workspace trust decisions
 
-## Security Posture Statement
+## Security statement
 
-Safe Exec is a best-effort guardrail extension. It improves visibility and approval around dangerous operations, but it does not create complete isolation and should never be treated as a substitute for real sandboxing or host-level controls.
+Safe Exec improves approval, visibility, and review around risky actions in VS Code. It does not create hard isolation and should never be described as sandboxing.

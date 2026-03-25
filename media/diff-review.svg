@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrative Safe Exec diff review</title>
+  <desc id="desc">An illustrative SVG mockup of the Safe Exec suspicious edit rollback, diff review, approval modal, and recent activity. It is not a real VS Code screenshot.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f2eadf"/>
+      <stop offset="100%" stop-color="#e4edf4"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#14202b" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#bg)"/>
+  <text x="52" y="56" fill="#6d5034" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">Illustrative SVG only - not a captured VS Code screenshot</text>
+
+  <g filter="url(#shadow)">
+    <rect x="46" y="82" width="1188" height="664" rx="24" fill="#f8f9f6"/>
+    <rect x="46" y="82" width="1188" height="42" rx="24" fill="#dde4ea"/>
+    <circle cx="82" cy="103" r="7" fill="#dc6a5f"/>
+    <circle cx="105" cy="103" r="7" fill="#e1b74a"/>
+    <circle cx="128" cy="103" r="7" fill="#5cbf83"/>
+    <rect x="185" y="93" width="530" height="21" rx="10" fill="#edf1f4"/>
+    <text x="204" y="108" fill="#5c6d78" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Safe Exec Review: package.json</text>
+
+    <rect x="70" y="150" width="540" height="470" rx="20" fill="#1d2a33"/>
+    <text x="96" y="186" fill="#f7f3ea" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Before rollback</text>
+    <text x="96" y="214" fill="#bcc8cf" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Previous accepted snapshot</text>
+    <rect x="96" y="238" width="488" height="342" rx="18" fill="#10181d"/>
+    <rect x="118" y="270" width="444" height="28" rx="8" fill="#24313a"/>
+    <text x="134" y="289" fill="#7ea2b4" font-family="JetBrains Mono, Consolas, monospace" font-size="14">"safeExec.policyBundles": []</text>
+    <rect x="118" y="320" width="380" height="28" rx="8" fill="#24313a"/>
+    <text x="134" y="339" fill="#7ea2b4" font-family="JetBrains Mono, Consolas, monospace" font-size="14">"safeExec.protectedCommands": [</text>
+    <rect x="118" y="370" width="252" height="28" rx="8" fill="#24313a"/>
+    <text x="134" y="389" fill="#7ea2b4" font-family="JetBrains Mono, Consolas, monospace" font-size="14">"github.copilot.generate"</text>
+
+    <rect x="626" y="150" width="540" height="470" rx="20" fill="#ffffff"/>
+    <text x="652" y="186" fill="#21333c" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Captured suspicious edit</text>
+    <text x="652" y="214" fill="#63757d" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Real diff review via virtual documents</text>
+    <rect x="652" y="238" width="488" height="342" rx="18" fill="#f4f7f9"/>
+    <rect x="676" y="270" width="344" height="28" rx="8" fill="#dcf2df"/>
+    <text x="692" y="289" fill="#245939" font-family="JetBrains Mono, Consolas, monospace" font-size="14">+ "safeExec.policyBundles": ["node-web"]</text>
+    <rect x="676" y="320" width="430" height="28" rx="8" fill="#dcf2df"/>
+    <text x="692" y="339" fill="#245939" font-family="JetBrains Mono, Consolas, monospace" font-size="14">+ "safeExec.proxy.workbench.action..."</text>
+    <rect x="676" y="370" width="312" height="28" rx="8" fill="#f6dddf"/>
+    <text x="692" y="389" fill="#7a2f39" font-family="JetBrains Mono, Consolas, monospace" font-size="14">- "workbench.action.tasks.runTask"</text>
+    <rect x="676" y="420" width="410" height="28" rx="8" fill="#dcf2df"/>
+    <text x="692" y="439" fill="#245939" font-family="JetBrains Mono, Consolas, monospace" font-size="14">+ "safeExec.proxy.workbench.action..."</text>
+    <text x="676" y="500" fill="#5f6f76" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="14">Safe Exec reapplies captured ranges first. Whole-document replace is fallback only.</text>
+
+    <rect x="350" y="192" width="580" height="208" rx="24" fill="#fff7ea" stroke="#dfc8a5" stroke-width="2"/>
+    <text x="382" y="232" fill="#6d4c16" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">Reapply suspicious edit?</text>
+    <text x="382" y="268" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">Reasons: changed 212 characters; used 4 separate edit ranges; matched a protected path rule</text>
+    <text x="382" y="298" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">This is a post-change rollback flow. Review the diff before reapplying.</text>
+    <text x="382" y="328" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">If the document changes while approval is pending, Safe Exec keeps the rollback.</text>
+    <rect x="382" y="348" width="126" height="34" rx="17" fill="#e9d5aa"/>
+    <text x="417" y="371" fill="#604312" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Open Diff</text>
+    <rect x="522" y="348" width="146" height="34" rx="17" fill="#295c48"/>
+    <text x="552" y="371" fill="#eff8f2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Reapply Edit</text>
+    <rect x="682" y="348" width="138" height="34" rx="17" fill="#6a4b54"/>
+    <text x="714" y="371" fill="#fff1f4" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Keep Rollback</text>
+
+    <rect x="70" y="642" width="1096" height="76" rx="20" fill="#eef3f6"/>
+    <text x="96" y="676" fill="#21343d" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="23" font-weight="700">Recent activity</text>
+    <text x="300" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">approved - edit - package.json</text>
+    <text x="596" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">conflict - edit - rollback kept</text>
+    <text x="884" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">replay-degraded - terminal</text>
+    <text x="96" y="703" fill="#677981" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="14">Local per-workspace history for approvals, denials, conflicts, degraded replays, and failures. Useful for review, not tamper-proof.</text>
+  </g>
+</svg>

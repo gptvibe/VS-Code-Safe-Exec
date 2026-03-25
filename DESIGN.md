@@ -5,52 +5,94 @@
 VS Code Safe Exec is a best-effort safety layer for three high-risk surfaces inside VS Code:
 
 - terminal command execution
-- sensitive VS Code command execution
-- large or suspicious text edits
+- explicit protected-command execution
+- large or sensitive text edits
 
-The architecture is intentionally simple:
+The design goal is to use stable VS Code APIs, keep behavior explainable, and avoid fake security claims.
 
-- `src/extension.ts` wires activation, rules loading, config, logging, and utility commands
-- `src/terminalInterceptor.ts` handles risky shell execution detection
-- `src/commandInterceptor.ts` handles guarded proxy and wrapper commands
-- `src/editInterceptor.ts` handles snapshot, rollback, approval, and reapply for edits
-- `src/permissionUI.ts` centralizes modal approval and preview UI
-- `src/rules.ts` provides defaults, config loading, file loading, and merge logic
+## Core components
 
-## Terminal Interception Layer
+- `src/extension.ts`
+  Activates the extension, wires commands, status bar state, onboarding, keybinding diagnostics, rules reloading, and workspace-trust messaging.
+- `src/terminalInterceptor.ts`
+  Matches risky shell commands, attempts interruption, and replays approved commands with the best terminal context stable APIs expose.
+- `src/commandInterceptor.ts`
+  Hosts the explicit Safe Exec proxy and wrapper commands.
+- `src/editInterceptor.ts`
+  Keeps snapshots, rolls back suspicious edits, opens a real diff review, and reapplies captured changes after approval.
+- `src/diffContentProvider.ts`
+  Supplies virtual documents so VS Code can render a native diff review.
+- `src/permissionUI.ts`
+  Centralizes the approval dialog and optional review action flow.
+- `src/rules.ts`
+  Defines built-in defaults, policy bundles, settings, rules-file loading, and merge behavior.
+- `src/keybindingInspector.ts`
+  Inspects user keybindings for common raw guarded-command bindings without equivalent Safe Exec proxies.
+- `src/onboarding.ts`
+  Builds the onboarding content shown by the first-run flow and the walkthrough command.
+- `src/auditLog.ts`
+  Records local structured history for approvals, denials, conflicts, degraded replays, failures, and status changes.
 
-Primary path:
+## Terminal command flow
 
-- runtime-detected `window.onDidStartTerminalShellExecution`
+Primary API:
 
-Supplemental path:
+- `window.onDidStartTerminalShellExecution`
 
-- runtime-detected `window.onDidWriteTerminalData`, used only heuristically
+Replay preference:
 
-Why this design:
+- `terminal.shellIntegration.executeCommand(...)`
 
-- shell integration gives the most useful practical command signal available in stable VS Code
-- terminal data interception may be optional or proposed depending on the build, so it is feature-detected and never assumed
+Fallback:
+
+- `terminal.sendText(...)`
 
 Flow:
 
-1. extract a command string from shell integration, or fall back to buffered terminal text
-2. normalize and compare against regex-based rules
-3. ignore commands that match `allowedCommands`
-4. flag commands that match `dangerousCommands` or `confirmationCommands`
-5. attempt interruption and terminal disposal
-6. show a modal approval dialog
-7. replay the exact command in a fresh terminal only if approved
+1. VS Code reports a shell execution start event.
+2. Safe Exec normalizes the command line and compares it against `allowedCommands`, `dangerousCommands`, and `confirmationCommands`.
+3. If the command matches a risky rule, Safe Exec records an `intercepted` audit event.
+4. Safe Exec attempts to interrupt and dispose the original terminal.
+5. The approval dialog includes:
+   - matched rule details
+   - command trust and confidence
+   - captured `cwd`
+   - explicit degraded replay warnings such as `cwd unknown`
+6. If approved, Safe Exec creates a fresh terminal and tries shell-integration-backed replay first.
+7. If replay shell integration is unavailable or fails, Safe Exec falls back to `sendText(...)` and records `replay-degraded`.
 
-The replay path uses a one-shot allowance so the replayed command is not blocked again.
+Important tradeoff:
 
-Limitation:
+- this is a kill-and-replay model, not true pre-execution enforcement
 
-- the extension does not truly block pre-execution. It reacts after execution has started and tries to minimize damage with a kill-and-replay pattern.
+## Edit review flow
 
-## Command Proxy Layer
+Observed API:
 
-Safe Exec does not pretend arbitrary built-in commands can be overridden transparently. Instead it exposes explicit proxy commands and a generic wrapper:
+- `workspace.onDidChangeTextDocument`
+
+Because the event is post-change, Safe Exec uses rollback and reapply instead of pretending it can block edits before they land.
+
+Flow:
+
+1. Safe Exec keeps a snapshot of the last accepted document state.
+2. Each change is evaluated against edit heuristics:
+   - changed characters
+   - affected lines
+   - number of edit ranges
+   - protected-path patterns
+3. If the edit looks suspicious, Safe Exec records `intercepted` and restores the previous snapshot.
+4. A virtual before/after diff session is created with `src/diffContentProvider.ts`.
+5. The approval dialog offers `Open Diff`.
+6. On approval, Safe Exec reapplies only the captured edit ranges when possible.
+7. If range-based reapply fails, Safe Exec falls back to whole-document replacement.
+8. If the document changes while approval is pending, Safe Exec keeps the rollback, records `conflict`, and warns instead of overwriting newer content.
+
+This keeps the flow readable and conservative without claiming stronger guarantees than the API allows.
+
+## Protected-command flow
+
+Safe Exec intentionally uses explicit proxy and wrapper commands:
 
 - `safeExec.proxy.workbench.action.terminal.runSelectedText`
 - `safeExec.proxy.workbench.action.tasks.runTask`
@@ -59,84 +101,104 @@ Safe Exec does not pretend arbitrary built-in commands can be overridden transpa
 
 Flow:
 
-1. receive the proxy or wrapper invocation
-2. refuse any attempt to route back into `safeExec.*` commands
-3. verify the target command exists
-4. show a modal approval dialog with a preview
-5. execute the original command only if approved
+1. A Safe Exec proxy or wrapper command is invoked.
+2. Safe Exec refuses recursive `safeExec.*` routing.
+3. Safe Exec verifies the target command exists.
+4. The user sees an approval dialog that explains why the command is considered risky.
+5. Only approved commands are executed.
 
-This design is honest, predictable, and compatible with stable VS Code APIs.
+Why this design:
 
-## Edit Interception Layer
+- stable VS Code APIs do not provide a transparent, reliable way to override arbitrary built-in commands while preserving their original semantics
+- explicit proxies are easier to document honestly
 
-Observed API:
+## Onboarding and adoption UX
 
-- `workspace.onDidChangeTextDocument`
+Safe Exec now includes:
 
-Constraint:
+- first-run onboarding
+- a walkthrough contribution
+- recommended proxy keybinding snippets
+- warnings when common raw guarded keybindings are found without matching Safe Exec proxy bindings
+- a status bar indicator that surfaces disabled, untrusted, and partial-coverage states
 
-- the event is post-change, so true pre-approval editing is not possible with stable APIs
+The onboarding and keybinding flows are intentionally manual. Safe Exec can recommend bindings, but it does not silently rewrite user keybindings.
 
-Fallback design:
-
-1. keep a snapshot of each open file’s last accepted content
-2. inspect each change event with heuristics
-3. if suspicious, replace the whole document with the prior snapshot
-4. ask for approval with a preview
-5. if approved, replace the whole document with the captured changed text
-
-The implementation uses recursion guards and muted document tracking to avoid infinite loops during rollback and reapply.
-
-## Rule Engine
+## Rule engine and policy bundles
 
 Rule sources:
 
-- built-in defaults in `src/rules.ts`
-- user or workspace JSON rules file, `.vscode/safe-exec.rules.json` by default
-- selected VS Code settings for overrides
+- built-in defaults
+- `.vscode/safe-exec.rules.json` or another configured rules file
+- selected VS Code settings
+- opt-in policy bundles from either the rules file or settings
 
-Supported sections:
+Built-in policy bundles:
 
-- `dangerousCommands`
-- `allowedCommands`
-- `confirmationCommands`
-- `protectedCommands`
-- `editHeuristics`
+- `node-web`
+- `python`
+- `docker`
+- `terraform-kubernetes`
+- `git-ci`
 
-Merge strategy:
+Merge behavior:
 
-- rule arrays append to defaults
-- protected commands are merged by command ID
-- edit heuristics are shallow-merged so workspace settings can override thresholds
+- pattern-rule arrays append to defaults
+- policy-bundle selections from settings and the rules file are unioned
+- protected commands are merged by command key
+- scalar edit thresholds are overridden in the order defaults -> rules file -> settings
+- protected and ignored path patterns are unioned
 
-## Permission UI
+The result is intentionally additive. Safe Exec avoids hidden rule removal behavior.
 
-All approvals route through a single helper that provides:
+## Workspace Trust
 
-- modal dialogs
-- risk level
-- source label
-- summary and detail text
-- optional preview document
+Safe Exec supports untrusted workspaces in a limited and explicit way:
 
-This keeps terminal, command, and edit flows visually consistent.
+- it can still show approvals and inspect text edits where VS Code allows it
+- it records trust-related status changes
+- it surfaces trust state in the status bar and onboarding UI
 
-## Failure Modes
+Workspace Trust is treated as a VS Code capability signal, not as a sandbox or security boundary.
 
-- shell integration unavailable: terminal coverage is reduced
-- command text unavailable: some risky commands may not be detected
-- interrupt arrives too late: command side effects may already begin
-- edit races: the file may change again while approval is pending
-- replay context drift: fresh terminals may not preserve exact shell state
-- non-text or out-of-process mutations: some changes happen outside observed editor events
+## Audit and observability
 
-These are documented instead of hidden.
+Safe Exec writes:
 
-## Future Improvements
+- human-readable operational lines to the `Safe Exec` output channel
+- structured JSON audit records for review and debugging
+- local per-workspace recent history shown through `Safe Exec: Show Recent Activity`
 
-- richer terminal context capture when stable APIs improve
-- diff-based edit previews instead of before/after snapshots
-- policy bundles for common stacks
-- workspace trust integration
-- per-workspace audit history and explicit approval records
-- optional status bar indicators for current protection state
+Tracked actions include:
+
+- `intercepted`
+- `interrupted`
+- `approved`
+- `replayed`
+- `replay-degraded`
+- `denied`
+- `failed-to-stop`
+- `failed`
+- `conflict`
+- `status`
+
+The audit trail is useful for operator visibility, but it is not tamper-proof.
+
+## Known tradeoffs
+
+- terminal safety depends heavily on shell integration quality
+- replay terminals cannot restore full prior shell state
+- raw built-in commands remain outside command protection unless a Safe Exec proxy is used
+- edit review is post-change and can race with subsequent edits
+- non-text mutations and out-of-process side effects can bypass these flows
+
+These tradeoffs are documented rather than hidden because honesty is part of the design.
+
+## Future improvements
+
+Reasonable next steps that still fit the project's posture:
+
+- better tests around shell-integration edge cases on each platform
+- more stack-specific rule examples and protected-path defaults
+- optional export of local recent activity for review workflows
+- clearer diagnostics when terminal replay falls back repeatedly on a given shell

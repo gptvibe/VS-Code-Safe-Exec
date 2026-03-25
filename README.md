@@ -1,229 +1,235 @@
 # VS Code Safe Exec
 
-VS Code Safe Exec is a best-effort VS Code extension that adds approval prompts around actions that AI agents and automation can execute too quickly:
+VS Code Safe Exec is a best-effort approval layer for risky actions that happen inside VS Code, especially when AI agents or automation can move faster than a human can comfortably review.
 
-- risky terminal commands
-- sensitive VS Code commands
-- large or suspicious code edits
+Safe Exec is deliberately not a sandbox. It does not claim hard isolation, guaranteed prevention, or transparent interception of every risky action. It slows down risky flows where stable VS Code APIs make that practical, and it says when protection is degraded.
 
-It is designed to reduce surprise, not to pretend perfect isolation. When VS Code only exposes a post-start or post-change signal, Safe Exec uses the safest practical fallback and says so clearly.
+## At a glance
 
-## What It Does
+- Risky terminal commands are matched after VS Code shell integration reports them.
+- Sensitive VS Code commands are protected only through explicit Safe Exec proxy and wrapper commands.
+- Large or sensitive edits are handled with rollback, diff review, and reapply.
+- Workspace Trust is surfaced honestly, but it is not treated as a security boundary.
+- Recent approvals, denials, degraded terminal replays, conflicts, and failures are recorded per workspace in local audit history.
 
-### 1. Protects terminal commands
+## Illustrative UX
 
-Safe Exec watches terminal shell execution and compares command text against regex rules.
+![Illustrative Safe Exec onboarding guide](media/onboarding.svg)
 
-If a command looks risky, it tries to:
+_Illustrative SVG, not a captured VS Code screenshot._
 
-1. interrupt and dispose the original terminal as quickly as possible
+![Illustrative Safe Exec diff review](media/diff-review.svg)
+
+_Illustrative SVG, not a captured VS Code screenshot._
+
+## What Safe Exec protects
+
+### 1. Risky terminal commands
+
+Safe Exec watches terminal shell execution through stable VS Code shell-integration APIs. When a command matches `dangerousCommands` or `confirmationCommands`, it tries to:
+
+1. interrupt and dispose the original terminal
 2. show a modal approval dialog
-3. replay the exact command in a fresh terminal only if you approve it
+3. replay the command in a fresh terminal only if you approve it
 
-Default risky examples include:
+Replay fidelity is best effort:
 
-- `rm -rf`
-- `Remove-Item -Recurse -Force`
-- `del /f /s /q`
-- `rmdir /s /q`
-- `git reset --hard`
-- `git clean -fdx`
-- `docker system prune -f`
-- `terraform destroy`
-- `kubectl delete`
-- `mkfs`
-- `dd ... of=/dev/...`
-- `diskutil eraseDisk`
-- `Format-Volume`
-- `diskpart`
+- Safe Exec preserves captured `cwd` when VS Code exposes it.
+- Safe Exec preserves replayable launch options such as shell path, shell args, and environment when available.
+- Safe Exec prefers shell-integration-backed replay with `executeCommand(...)`.
+- If replay shell integration is unavailable or fails, Safe Exec falls back to `sendText(...)`.
+- The approval dialog calls out degraded context such as `cwd unknown`, `shell integration unavailable in the replay terminal`, or `replay may not match original shell state`.
 
-Important: this is a kill-and-replay model, not guaranteed true pre-execution blocking.
+Important: terminal handling is post-start, not pre-execution blocking. A risky command may already have started before Safe Exec interrupts or disposes the terminal.
 
-### 2. Protects sensitive VS Code commands
+### 2. Suspicious edits
 
-VS Code does not provide a reliable way to transparently override arbitrary built-in commands and still preserve their original behavior exactly. Safe Exec therefore uses guarded proxy and wrapper commands instead.
+Safe Exec snapshots open text documents. When an edit crosses configured thresholds, uses many edit ranges, or touches a protected path, it:
 
-Included proxies:
+1. restores the previous snapshot
+2. opens a real VS Code diff review on demand
+3. reapplies only the captured edit ranges when you approve
+4. falls back to whole-document replacement only if range-based reapply fails
+
+If the document changes while approval is pending, Safe Exec does not overwrite the newer content. It keeps the rollback, shows a clear conflict message, and asks the user to reapply manually if they still want the change.
+
+Important: edit protection is rollback-and-reapply. VS Code has already applied the edit by the time Safe Exec sees the change event.
+
+### 3. Protected VS Code commands
+
+Safe Exec does not pretend built-in commands can be transparently overridden. Command protection works only through explicit Safe Exec commands:
 
 - `safeExec.proxy.workbench.action.terminal.runSelectedText`
 - `safeExec.proxy.workbench.action.tasks.runTask`
 - `safeExec.proxy.github.copilot.generate`
-
-Generic wrapper:
-
 - `safeExec.runProtectedCommand`
 
-These commands ask for approval first, then run the real target command only if you allow it.
+If a user or agent invokes the raw built-in command instead of the proxy, Safe Exec does not claim protection it does not have.
 
-### 3. Protects large or suspicious edits
+## First-run and onboarding
 
-Safe Exec keeps snapshots of open documents. When an edit crosses configured thresholds, uses many edit ranges, or touches protected files, it:
+Safe Exec now includes a first-run onboarding flow and a native walkthrough:
 
-1. rolls the document back to the previous snapshot
-2. shows a modal preview
-3. reapplies the exact edit only if you approve it
+- `Safe Exec: Open Onboarding`
+- `Get Started with Safe Exec`
+- `Safe Exec: Install Recommended Keybindings`
 
-Important: this is a rollback-and-reapply model, not true pre-approval editing.
+The onboarding guide explains:
 
-## Why It Exists
+- what Safe Exec protects
+- what it does not protect
+- how Workspace Trust fits in
+- which proxy keybindings are recommended
+- which policy bundles are available
 
-AI coding tools can inspect files, generate code, run commands, execute tasks, and refactor large parts of a workspace in seconds. That speed is useful until an agent:
+Safe Exec can inspect the user `keybindings.json` file and warn when common raw guarded commands are bound directly without an equivalent Safe Exec proxy binding. It opens a recommended JSON snippet beside the user keybindings file, but it does not edit keybindings automatically.
 
-- runs a destructive command
-- executes a task with side effects
-- rewrites a protected config file
-- applies a large edit you have not reviewed yet
+## Status bar and recent activity
 
-Safe Exec adds friction exactly where that speed becomes risky.
+Safe Exec shows a status bar item that surfaces whether protection is:
 
-## Platform Support
+- enabled
+- disabled
+- running in an untrusted workspace
+- missing recommended proxy keybinding coverage
 
-The extension is intended to be useful on all three major desktop platforms:
+The status bar opens onboarding, and `Safe Exec: Show Recent Activity` opens a local per-workspace audit history. That history is useful for review and debugging, but it is not tamper-proof and should not be treated as a forensic record.
 
-- macOS
-- Linux
-- Windows
+Structured audit events include:
 
-The built-in rules include Unix-style shell commands, Windows PowerShell commands, Windows `cmd.exe` commands, and macOS disk utility examples.
+- `intercepted`
+- `interrupted`
+- `approved`
+- `replayed`
+- `replay-degraded`
+- `denied`
+- `failed-to-stop`
+- `failed`
+- `conflict`
+- `status`
 
-That said, platform support is still best effort:
+## Workspace Trust
 
-- terminal protection depends on VS Code shell integration
-- command matching is regex-based, so it cannot cover every alias or every admin tool by default
-- teams should still customize `.vscode/safe-exec.rules.json` for their own shells, package managers, and infrastructure tools
+Safe Exec integrates with VS Code Workspace Trust in an honest way:
 
-## How To Use
+- it still works in untrusted workspaces where stable APIs allow it
+- it records workspace trust state changes in local audit history
+- it surfaces trust state in the status bar and onboarding flow
+- it does not claim Workspace Trust is a sandbox or a replacement for approval prompts
 
-### Quick start
+Workspace Trust can reduce some automatic workspace behavior in VS Code. It does not isolate shell commands, extensions, or the operating system.
+
+## Policy bundles
+
+Safe Exec includes opt-in policy bundles for common stacks:
+
+- `node-web`
+- `python`
+- `docker`
+- `terraform-kubernetes`
+- `git-ci`
+
+Bundles add stack-specific command rules and protected-path patterns. They are intentionally conservative presets, not complete coverage for every tool in a stack.
+
+Examples:
+
+- `node-web` adds package publishing, deploy-style scripts, and web toolchain config patterns.
+- `python` adds Python packaging, lock, and environment patterns.
+- `docker` adds container lifecycle and Docker config patterns.
+- `terraform-kubernetes` adds Terraform apply, Helm, and Kubernetes mutation patterns.
+- `git-ci` adds force-push and CI workflow patterns.
+
+You can enable bundles in either VS Code settings or `.vscode/safe-exec.rules.json`. Safe Exec unions the bundle selections from both places.
+
+## Quick start
 
 1. Install the extension.
-2. Open your workspace.
-3. Run `Safe Exec: Open Rules File` if you want to create or edit `.vscode/safe-exec.rules.json`.
-4. Keep protection enabled with `Safe Exec: Toggle Protection`.
+2. Open `Safe Exec: Open Onboarding`.
+3. Review `Safe Exec: Install Recommended Keybindings` and wire proxy commands for the shortcuts you actually use.
+4. Open `Safe Exec: Open Rules File` and enable any policy bundles that match your stack.
+5. Keep an eye on the status bar state and `Safe Exec: Show Recent Activity`.
 
-### Terminal protection
-
-Once enabled, Safe Exec automatically screens terminal commands when shell integration provides command text.
-
-If a command matches:
-
-- `allowedCommands`, it runs without prompting
-- `confirmationCommands`, it asks first
-- `dangerousCommands`, it asks first with a higher risk label
-
-### Protected VS Code commands
-
-To use command protection, call the Safe Exec proxy commands instead of the raw built-in commands.
-
-Example keybinding:
+Example workspace rules file:
 
 ```json
-[
-  {
-    "key": "ctrl+enter",
-    "command": "safeExec.proxy.workbench.action.terminal.runSelectedText",
-    "when": "editorTextFocus"
-  }
-]
+{
+  "policyBundles": ["node-web", "git-ci"],
+  "confirmationCommands": [
+    {
+      "pattern": "\\bwrangler\\s+secret\\s+put\\b",
+      "description": "Update Cloudflare secrets",
+      "risk": "high"
+    }
+  ],
+  "protectedCommands": [
+    {
+      "command": "workbench.action.tasks.runTask",
+      "description": "Always require approval for tasks",
+      "risk": "high"
+    }
+  ]
+}
 ```
-
-Example wrapper usage:
-
-```ts
-await vscode.commands.executeCommand(
-  "safeExec.runProtectedCommand",
-  "workbench.action.tasks.runTask"
-);
-```
-
-### Edit protection
-
-Edit protection works automatically for open text documents. If an edit looks suspicious based on your thresholds, Safe Exec rolls it back and asks whether to reapply it.
-
-This is especially useful for:
-
-- AI-generated multi-file refactors
-- large pasted changes
-- edits to `.vscode`, CI, package manifests, and lockfiles
 
 ## Configuration
 
-Extension settings:
+Important settings:
 
 - `safeExec.enabled`
 - `safeExec.rulesPath`
+- `safeExec.policyBundles`
 - `safeExec.protectedCommands`
 - `safeExec.terminal.killStrategy`
 - `safeExec.editHeuristics.minChangedCharacters`
 - `safeExec.editHeuristics.minAffectedLines`
 - `safeExec.editHeuristics.maxPreviewCharacters`
 
-Workspace rules file:
+`safeExec.editHeuristics.maxPreviewCharacters` is now a legacy compatibility setting. Safe Exec uses a real diff review flow for suspicious edits; this setting no longer controls the primary review experience.
 
-- default path: `.vscode/safe-exec.rules.json`
-- merged with built-in defaults at runtime
+See [RULES.md](RULES.md) for merge behavior, examples, and bundle details.
 
-Supported rule sections:
+## Protected-path defaults
 
-- `dangerousCommands`
-- `allowedCommands`
-- `confirmationCommands`
-- `protectedCommands`
-- `editHeuristics`
+The built-in protected-path defaults now include common high-value files such as:
 
-See [RULES.md](RULES.md) for the full format and examples.
+- `.github/` and common CI config
+- `.vscode/`
+- `.env*`
+- `package.json` and major lockfiles
+- Python packaging files
+- `Dockerfile` and compose files
+- Terraform and Helm files
+- `Jenkinsfile`
 
-## Commands Included
+These defaults are configurable. They are meant to catch sensitive edits more often, not to freeze those files permanently.
 
-- `Safe Exec: Toggle Protection`
-- `Safe Exec: Open Rules File`
-- `Safe Exec: Show Effective Rules`
-- `Safe Exec: Reload Rules`
+## Platform support
 
-## Output And Review Flow
+Safe Exec aims for useful best-effort behavior on:
 
-Safe Exec uses:
+- macOS
+- Linux
+- Windows
 
-- modal approval dialogs
-- optional preview documents
-- an output channel named `Safe Exec`
+Built-in terminal rules include Unix-style commands, PowerShell commands, `cmd.exe` commands, and macOS disk utility examples. Coverage is still incomplete by design; teams should add their own rules for local shells, aliases, scripts, and infrastructure tools.
 
-This makes it easier to understand why something was blocked, what matched, and what would run or be reapplied if approved.
+## Limits and bypasses
 
-## Development
+Safe Exec is intentionally explicit about residual risk:
 
-Build locally:
+- terminal interception depends on shell integration and is post-start
+- terminal replay happens in a fresh terminal and cannot restore exact shell state
+- built-in commands are not secretly wrapped; only Safe Exec proxies and wrappers are protected
+- keybindings that call raw built-in commands bypass proxy approval
+- edit interception is post-change, so rollback can race with later edits
+- extensions or tasks that mutate files or run processes outside the observed VS Code flows can bypass some protections
+- audit history is local workspace state, best effort, and not tamper-proof
 
-```bash
-npm install
-npm run compile
-```
+If you need hard isolation, use OS-level permissions, containers, VMs, CI isolation, and least-privilege accounts. Safe Exec is a friction layer, not a sandbox.
 
-Run in VS Code:
+## More detail
 
-1. Open this repo in VS Code.
-2. Run `npm install`.
-3. Run `npm run compile`.
-4. Press `F5` to launch an Extension Development Host.
-
-## Known Limitations
-
-- Terminal interception depends heavily on shell integration. Without it, protection is reduced.
-- `onDidWriteTerminalData` is treated as optional and heuristic only.
-- A terminal command may already have started by the time Safe Exec interrupts or disposes the terminal.
-- Replayed terminal commands run in a fresh terminal and may not preserve the exact prior shell state or working directory.
-- Built-in commands are not secretly overridden; only proxy or wrapped commands are guarded.
-- Edit interception happens after the change event, so rollback and reapply can race with later edits.
-- Platform coverage is broad by default, but still not exhaustive for every shell, alias, or admin tool.
-- Extensions that mutate files or run processes outside the observed VS Code flows can bypass some protections.
-
-See [DESIGN.md](DESIGN.md), [SECURITY.md](SECURITY.md), and [AGENTS.md](AGENTS.md) for deeper detail.
-
-## Contributing
-
-Contributions should keep the project honest:
-
-- prefer real guardrails over fake guarantees
-- document fallbacks when an API is missing or only post-event
-- avoid sandbox claims
-- keep behavior readable, defensive, and explicit
+- [DESIGN.md](DESIGN.md) explains the architecture and tradeoffs.
+- [RULES.md](RULES.md) explains rules, bundles, and merge behavior.
+- [SECURITY.md](SECURITY.md) explains the security posture, bypasses, and residual risk.
+- [AGENTS.md](AGENTS.md) explains the agent behavior expected in this repository.

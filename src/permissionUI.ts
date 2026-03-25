@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { RiskLevel } from "./rules";
 
+export type ApprovalDecision = "allow" | "deny" | "review";
+
 export interface PermissionRequest {
   title: string;
   source: string;
@@ -11,6 +13,10 @@ export interface PermissionRequest {
   previewLanguage?: string;
   allowLabel?: string;
   denyLabel?: string;
+  reviewAction?: {
+    label?: string;
+    open: () => Promise<void>;
+  };
 }
 
 const RISK_ORDER: Record<RiskLevel, number> = {
@@ -20,40 +26,31 @@ const RISK_ORDER: Record<RiskLevel, number> = {
   critical: 4
 };
 
+export interface ApprovalResponder {
+  requestDecision(request: PermissionRequest): Promise<ApprovalDecision>;
+}
+
 export class PermissionUI {
-  public constructor(private readonly output: vscode.OutputChannel) {}
+  public constructor(
+    private readonly output: vscode.OutputChannel,
+    private readonly responder: ApprovalResponder = new ModalApprovalResponder()
+  ) {}
 
   public async requestApproval(request: PermissionRequest): Promise<boolean> {
-    const allowLabel = request.allowLabel ?? "Allow";
-    const denyLabel = request.denyLabel ?? "Deny";
-    const previewLabel = request.preview ? "Open Preview" : undefined;
-
     while (true) {
-      const detailLines = [
-        request.title,
-        `Source: ${request.source}`,
-        `Risk: ${request.risk.toUpperCase()}`,
-        request.detail ?? ""
-      ].filter((line) => line.trim().length > 0);
-
-      const selection = await vscode.window.showWarningMessage(
-        request.summary,
-        {
-          modal: true,
-          detail: detailLines.join("\n")
-        },
-        allowLabel,
-        ...(previewLabel ? [previewLabel] : []),
-        denyLabel
-      );
-
-      if (selection === allowLabel) {
+      const decision = await this.responder.requestDecision(request);
+      if (decision === "allow") {
         this.output.appendLine(`[ui] Allowed: ${request.title}`);
         return true;
       }
 
-      if (selection === previewLabel && request.preview) {
-        await this.openPreview(request);
+      if (decision === "review") {
+        if (request.reviewAction) {
+          await request.reviewAction.open();
+        } else if (request.preview) {
+          await this.openPreview(request);
+        }
+
         continue;
       }
 
@@ -101,5 +98,56 @@ export class PermissionUI {
       this.output.appendLine(`[ui] Failed to open preview: ${message}`);
       void vscode.window.showErrorMessage(`Safe Exec failed to open preview: ${message}`);
     }
+  }
+}
+
+class ModalApprovalResponder implements ApprovalResponder {
+  public async requestDecision(request: PermissionRequest): Promise<ApprovalDecision> {
+    const allowLabel = request.allowLabel ?? "Allow";
+    const denyLabel = request.denyLabel ?? "Deny";
+    const reviewLabel = request.reviewAction?.label ?? (request.preview ? "Open Preview" : undefined);
+    const detailLines = [
+      request.title,
+      `Source: ${request.source}`,
+      `Risk: ${request.risk.toUpperCase()}`,
+      request.detail ?? ""
+    ].filter((line) => line.trim().length > 0);
+
+    const selection = await vscode.window.showWarningMessage(
+      request.summary,
+      {
+        modal: true,
+        detail: detailLines.join("\n")
+      },
+      allowLabel,
+      ...(reviewLabel ? [reviewLabel] : []),
+      denyLabel
+    );
+
+    if (selection === allowLabel) {
+      return "allow";
+    }
+
+    if (reviewLabel && selection === reviewLabel) {
+      return "review";
+    }
+
+    return "deny";
+  }
+}
+
+export class ScriptedApprovalResponder implements ApprovalResponder {
+  private readonly decisions: ApprovalDecision[] = [];
+
+  public enqueue(decision: ApprovalDecision): void {
+    this.decisions.push(decision);
+  }
+
+  public reset(): void {
+    this.decisions.length = 0;
+  }
+
+  public async requestDecision(): Promise<ApprovalDecision> {
+    return this.decisions.shift() ?? "deny";
   }
 }

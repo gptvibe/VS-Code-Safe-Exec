@@ -1,10 +1,14 @@
 import * as vscode from "vscode";
+import { AuditLog } from "./auditLog";
+import { DiffContentProvider } from "./diffContentProvider";
 import { PermissionUI } from "./permissionUI";
 import { EditHeuristics, RiskLevel, SafeExecRules, matchesAnyRegexPattern } from "./rules";
 
 interface EditInterceptorOptions {
   output: vscode.OutputChannel;
   permissionUI: PermissionUI;
+  auditLog: AuditLog;
+  diffContentProvider: DiffContentProvider;
   getRules: () => SafeExecRules;
   isEnabled: () => boolean;
 }
@@ -28,19 +32,27 @@ interface CapturedChangeEvent {
   changes: CapturedContentChange[];
 }
 
+interface HandledEditSignature {
+  version: number;
+  newText: string;
+  recordedAt: number;
+}
+
 interface SuspiciousEditEvaluation {
   changedCharacters: number;
   affectedLines: number;
   reasons: string[];
   risk: RiskLevel;
-  preview: string;
 }
 
 export class EditInterceptor {
+  private static readonly DUPLICATE_SUPPRESSION_WINDOW_MS = 2000;
   private readonly snapshots = new Map<string, DocumentSnapshot>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly mutedDocuments = new Map<string, number>();
+  private readonly mutedTexts = new Map<string, string[]>();
   private readonly approvalsInFlight = new Set<string>();
+  private readonly recentlyHandledEdits = new Map<string, HandledEditSignature[]>();
 
   public constructor(private readonly options: EditInterceptorOptions) {}
 
@@ -58,6 +70,7 @@ export class EditInterceptor {
         this.snapshots.delete(key);
         this.queues.delete(key);
         this.mutedDocuments.delete(key);
+        this.mutedTexts.delete(key);
         this.approvalsInFlight.delete(key);
       }),
       vscode.workspace.onDidChangeTextDocument((event) => {
@@ -103,6 +116,12 @@ export class EditInterceptor {
     const key = this.getKey(event.uri);
 
     if (this.consumeMute(key)) {
+      this.discardMutedText(key, event.newText);
+      this.captureSnapshotFromEvent(event);
+      return;
+    }
+
+    if (this.consumeMutedText(key, event.newText)) {
       this.captureSnapshotFromEvent(event);
       return;
     }
@@ -123,6 +142,12 @@ export class EditInterceptor {
       return;
     }
 
+    if (this.shouldIgnoreDuplicateEvent(key, event)) {
+      this.log(`Ignoring duplicate suspicious edit event for ${document.uri.toString()} (version ${event.version}).`);
+      this.captureSnapshot(document);
+      return;
+    }
+
     const previousSnapshot = this.snapshots.get(key);
     if (!previousSnapshot) {
       this.captureSnapshot(document);
@@ -136,7 +161,7 @@ export class EditInterceptor {
     }
 
     const heuristics = this.options.getRules().editHeuristics;
-    const evaluation = this.evaluateChange(document, previousSnapshot.text, event, heuristics);
+    const evaluation = this.evaluateChange(document, event, heuristics);
     if (!evaluation) {
       this.captureSnapshot(document);
       return;
@@ -149,6 +174,7 @@ export class EditInterceptor {
     }
 
     this.approvalsInFlight.add(key);
+    this.rememberHandledEdit(key, event);
 
     try {
       await this.rollbackPromptAndMaybeReapply(document, previousSnapshot, event, evaluation);
@@ -159,7 +185,6 @@ export class EditInterceptor {
 
   private evaluateChange(
     document: vscode.TextDocument,
-    previousText: string,
     event: CapturedChangeEvent,
     heuristics: EditHeuristics
   ): SuspiciousEditEvaluation | undefined {
@@ -167,15 +192,15 @@ export class EditInterceptor {
       return undefined;
     }
 
-    const path = document.uri.scheme === "file" ? document.uri.fsPath : document.uri.toString();
-    if (matchesAnyRegexPattern(heuristics.ignoredPathPatterns, path)) {
+    const targetPath = document.uri.scheme === "file" ? document.uri.fsPath : document.uri.toString();
+    if (matchesAnyRegexPattern(heuristics.ignoredPathPatterns, targetPath)) {
       return undefined;
     }
 
     const reasons: string[] = [];
     const changedCharacters = this.calculateChangedCharacters(event.changes);
     const affectedLines = this.calculateAffectedLines(event.changes);
-    const protectedPath = matchesAnyRegexPattern(heuristics.protectedPathPatterns, path);
+    const protectedPath = matchesAnyRegexPattern(heuristics.protectedPathPatterns, targetPath);
 
     if (changedCharacters >= heuristics.minChangedCharacters) {
       reasons.push(`changed ${changedCharacters} characters`);
@@ -201,8 +226,7 @@ export class EditInterceptor {
       changedCharacters,
       affectedLines,
       reasons,
-      risk: this.deriveRiskLevel(changedCharacters, affectedLines, heuristics, protectedPath, event.changes.length),
-      preview: this.buildPreview(previousText, event.newText, changedCharacters, affectedLines, heuristics.maxPreviewCharacters)
+      risk: this.deriveRiskLevel(changedCharacters, affectedLines, heuristics, protectedPath, event.changes.length)
     };
   }
 
@@ -212,34 +236,87 @@ export class EditInterceptor {
     event: CapturedChangeEvent,
     evaluation: SuspiciousEditEvaluation
   ): Promise<void> {
+    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
     this.log(`Intercepting suspicious edit in ${document.uri.toString()}: ${evaluation.reasons.join("; ")}`);
+    this.options.auditLog.record({
+      action: "intercepted",
+      surface: "edit",
+      source: `edit:${relativePath}`,
+      summary: `Rolled back suspicious edit in ${relativePath}`,
+      risk: evaluation.risk,
+      detail: evaluation.reasons.join("; "),
+      metadata: {
+        changedCharacters: evaluation.changedCharacters,
+        affectedLines: evaluation.affectedLines,
+        rangeCount: event.changes.length
+      }
+    });
 
     const rolledBack = await this.replaceWholeDocument(document, previousSnapshot.text);
     if (!rolledBack) {
       this.log(`Rollback failed for ${document.uri.toString()}; leaving document as-is.`);
+      this.options.auditLog.record({
+        action: "failed",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Rollback failed in ${relativePath}`,
+        risk: evaluation.risk
+      });
       this.captureSnapshot(document);
       return;
     }
 
     const rolledBackDocument = await vscode.workspace.openTextDocument(document.uri);
+    const rollbackSettled = await this.waitForDocumentText(document.uri, previousSnapshot.text);
+    if (!rollbackSettled) {
+      this.log(`Rollback did not settle for ${document.uri.toString()}; leaving document in the last observed state.`);
+      this.options.auditLog.record({
+        action: "failed",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Rollback could not be confirmed in ${relativePath}`,
+        risk: evaluation.risk
+      });
+      this.captureSnapshot(rolledBackDocument);
+      return;
+    }
+
     const rollbackVersion = rolledBackDocument.version;
     this.captureSnapshot(rolledBackDocument);
 
-    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
-    const approved = await this.options.permissionUI.requestApproval({
-      title: "Reapply suspicious edit?",
-      source: `edit:${relativePath}`,
-      risk: evaluation.risk,
-      summary: `Safe Exec rolled back a large or sensitive edit in ${relativePath}.`,
-      detail: [
-        `Reasons: ${evaluation.reasons.join("; ")}`,
-        "This is a post-change rollback flow. VS Code applied the edit first, Safe Exec restored the previous snapshot, and approval reapplies the exact change."
-      ].join("\n"),
-      preview: evaluation.preview,
-      previewLanguage: "markdown",
-      allowLabel: "Reapply Edit",
-      denyLabel: "Keep Rollback"
+    const diffSession = this.options.diffContentProvider.createSession({
+      resource: document.uri,
+      title: `Safe Exec Review: ${relativePath}`,
+      before: previousSnapshot.text,
+      after: event.newText
     });
+
+    const approved = await (async () => {
+      try {
+        return await this.options.permissionUI.requestApproval({
+          title: "Reapply suspicious edit?",
+          source: `edit:${relativePath}`,
+          risk: evaluation.risk,
+          summary: `Safe Exec rolled back a large or sensitive edit in ${relativePath}.`,
+          detail: [
+            `Reasons: ${evaluation.reasons.join("; ")}`,
+            `Changed characters: ${evaluation.changedCharacters}`,
+            `Affected lines: ${evaluation.affectedLines}`,
+            "This is a post-change rollback flow. VS Code applied the edit first, Safe Exec restored the previous snapshot, and approval reapplies the captured change."
+          ].join("\n"),
+          reviewAction: {
+            label: "Open Diff",
+            open: async () => {
+              await this.options.diffContentProvider.openDiff(diffSession);
+            }
+          },
+          allowLabel: "Reapply Edit",
+          denyLabel: "Keep Rollback"
+        });
+      } finally {
+        diffSession.dispose();
+      }
+    })();
 
     const currentDocument = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === document.uri.toString());
     if (!currentDocument) {
@@ -248,24 +325,76 @@ export class EditInterceptor {
 
     if (!approved) {
       this.log(`Denied suspicious edit in ${document.uri.toString()}.`);
+      this.options.auditLog.record({
+        action: "denied",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Kept rollback in ${relativePath}`,
+        risk: evaluation.risk
+      });
       this.captureSnapshot(currentDocument);
       return;
     }
+
+    this.options.auditLog.record({
+      action: "approved",
+      surface: "edit",
+      source: `edit:${relativePath}`,
+      summary: `Approved suspicious edit in ${relativePath}`,
+      risk: evaluation.risk
+    });
 
     if (currentDocument.version !== rollbackVersion) {
+      const message = `Safe Exec kept the rollback for ${relativePath} because the document changed while approval was pending. Review the diff and reapply manually if you still want it.`;
       this.log(`Skipping reapply for ${document.uri.toString()} because the document changed during approval.`);
+      this.options.auditLog.record({
+        action: "conflict",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Skipped reapply in ${relativePath} after a conflicting edit`,
+        risk: evaluation.risk
+      });
+      void vscode.window.showWarningMessage(message, { modal: true });
       this.captureSnapshot(currentDocument);
       return;
     }
 
-    const reapplied = await this.replaceWholeDocument(currentDocument, event.newText);
+    const reapplied = await this.reapplyCapturedChanges(currentDocument, event);
     if (!reapplied) {
       this.log(`Failed to reapply approved edit for ${document.uri.toString()}.`);
+      this.options.auditLog.record({
+        action: "failed",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Failed to reapply approved edit in ${relativePath}`,
+        risk: evaluation.risk
+      });
       this.captureSnapshot(currentDocument);
       return;
     }
 
     this.log(`Reapplied approved edit in ${document.uri.toString()}.`);
+    const refreshedDocument = await vscode.workspace.openTextDocument(document.uri);
+    this.captureSnapshot(refreshedDocument);
+  }
+
+  private async reapplyCapturedChanges(document: vscode.TextDocument, event: CapturedChangeEvent): Promise<boolean> {
+    const key = this.getKey(document.uri);
+    const edit = new vscode.WorkspaceEdit();
+    for (const change of event.changes) {
+      edit.replace(document.uri, change.range, change.text);
+    }
+
+    this.queueMutedText(key, event.newText);
+    this.incrementMute(key);
+    const appliedRanges = await vscode.workspace.applyEdit(edit);
+    if (appliedRanges) {
+      return this.waitForDocumentText(document.uri, event.newText);
+    }
+
+    this.decrementMute(key);
+    this.discardMutedText(key, event.newText);
+    return this.replaceWholeDocument(document, event.newText);
   }
 
   private calculateChangedCharacters(changes: readonly CapturedContentChange[]): number {
@@ -302,57 +431,39 @@ export class EditInterceptor {
     return "medium";
   }
 
-  private buildPreview(
-    previousText: string,
-    newText: string,
-    changedCharacters: number,
-    affectedLines: number,
-    maxPreviewCharacters: number
-  ): string {
-    return [
-      `Changed characters: ${changedCharacters}`,
-      `Affected lines: ${affectedLines}`,
-      "",
-      "## Before",
-      "",
-      "```text",
-      this.truncate(previousText, maxPreviewCharacters),
-      "```",
-      "",
-      "## After",
-      "",
-      "```text",
-      this.truncate(newText, maxPreviewCharacters),
-      "```"
-    ].join("\n");
-  }
-
-  private truncate(value: string, maxLength: number): string {
-    if (value.length <= maxLength) {
-      return value;
-    }
-
-    const headLength = Math.floor(maxLength / 2);
-    const tailLength = maxLength - headLength;
-    return `${value.slice(0, headLength)}\n\n... preview truncated ...\n\n${value.slice(value.length - tailLength)}`;
-  }
-
   private async replaceWholeDocument(document: vscode.TextDocument, text: string): Promise<boolean> {
     if (document.getText() === text) {
       return true;
     }
 
+    const key = this.getKey(document.uri);
     const edit = new vscode.WorkspaceEdit();
     edit.replace(document.uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), text);
 
-    this.incrementMute(this.getKey(document.uri));
+    this.queueMutedText(key, text);
+    this.incrementMute(key);
     const applied = await vscode.workspace.applyEdit(edit);
     if (!applied) {
-      this.decrementMute(this.getKey(document.uri));
+      this.decrementMute(key);
+      this.discardMutedText(key, text);
       return false;
     }
 
-    return true;
+    return this.waitForDocumentText(document.uri, text);
+  }
+
+  private async waitForDocumentText(uri: vscode.Uri, expectedText: string, timeoutMs = 1000): Promise<boolean> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      const currentDocument = await vscode.workspace.openTextDocument(uri);
+      if (currentDocument.getText() === expectedText) {
+        return true;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    return false;
   }
 
   private captureSnapshot(document: vscode.TextDocument): void {
@@ -381,6 +492,12 @@ export class EditInterceptor {
     this.mutedDocuments.set(key, (this.mutedDocuments.get(key) ?? 0) + 1);
   }
 
+  private queueMutedText(key: string, text: string): void {
+    const queued = this.mutedTexts.get(key) ?? [];
+    queued.push(text);
+    this.mutedTexts.set(key, queued);
+  }
+
   private decrementMute(key: string): void {
     const current = this.mutedDocuments.get(key);
     if (!current) {
@@ -403,6 +520,61 @@ export class EditInterceptor {
 
     this.decrementMute(key);
     return true;
+  }
+
+  private consumeMutedText(key: string, text: string): boolean {
+    const queued = this.mutedTexts.get(key);
+    if (!queued || queued.length === 0) {
+      return false;
+    }
+
+    const index = queued.indexOf(text);
+    if (index < 0) {
+      return false;
+    }
+
+    queued.splice(index, 1);
+    if (queued.length === 0) {
+      this.mutedTexts.delete(key);
+    } else {
+      this.mutedTexts.set(key, queued);
+    }
+
+    return true;
+  }
+
+  private discardMutedText(key: string, text: string): void {
+    void this.consumeMutedText(key, text);
+  }
+
+  private rememberHandledEdit(key: string, event: CapturedChangeEvent): void {
+    const now = Date.now();
+    const activeEntries = (this.recentlyHandledEdits.get(key) ?? []).filter(
+      (entry) => now - entry.recordedAt < EditInterceptor.DUPLICATE_SUPPRESSION_WINDOW_MS
+    );
+    activeEntries.push({
+      version: event.version,
+      newText: event.newText,
+      recordedAt: now
+    });
+    this.recentlyHandledEdits.set(key, activeEntries.slice(-6));
+  }
+
+  private shouldIgnoreDuplicateEvent(key: string, event: CapturedChangeEvent): boolean {
+    const now = Date.now();
+    const activeEntries = (this.recentlyHandledEdits.get(key) ?? []).filter(
+      (entry) => now - entry.recordedAt < EditInterceptor.DUPLICATE_SUPPRESSION_WINDOW_MS
+    );
+
+    if (activeEntries.length === 0) {
+      this.recentlyHandledEdits.delete(key);
+      return false;
+    }
+
+    this.recentlyHandledEdits.set(key, activeEntries);
+    return activeEntries.some(
+      (entry) => entry.newText === event.newText && event.version >= entry.version && event.version <= entry.version + 3
+    );
   }
 
   private getKey(uri: vscode.Uri): string {

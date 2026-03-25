@@ -1,10 +1,12 @@
 import * as vscode from "vscode";
+import { AuditLog } from "./auditLog";
 import { PermissionUI } from "./permissionUI";
 import { ProtectedCommandRule, RiskLevel, SafeExecRules } from "./rules";
 
 export interface CommandInterceptorOptions {
   output: vscode.OutputChannel;
   permissionUI: PermissionUI;
+  auditLog: AuditLog;
   getRules: () => SafeExecRules;
   isEnabled: () => boolean;
 }
@@ -131,8 +133,23 @@ export class CommandInterceptor {
 
     if (!approved) {
       this.log(`Denied protected command "${targetCommand}".`);
+      this.options.auditLog.record({
+        action: "denied",
+        surface: "command",
+        source: proxy.proxyCommand,
+        summary: `Denied "${targetCommand}"`,
+        risk: matchedRule?.risk ?? proxy.defaultRisk
+      });
       return undefined;
     }
+
+    this.options.auditLog.record({
+      action: "approved",
+      surface: "command",
+      source: proxy.proxyCommand,
+      summary: `Approved "${targetCommand}"`,
+      risk: matchedRule?.risk ?? proxy.defaultRisk
+    });
 
     return this.executeCommand(targetCommand, targetArgs);
   }
@@ -146,6 +163,13 @@ export class CommandInterceptor {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log(`Execution failed for "${targetCommand}": ${message}`);
+      this.options.auditLog.record({
+        action: "failed",
+        surface: "command",
+        source: targetCommand,
+        summary: `Failed to execute "${targetCommand}"`,
+        detail: message
+      });
       void vscode.window.showErrorMessage(`Safe Exec failed to execute "${targetCommand}": ${message}`);
       throw error;
     } finally {

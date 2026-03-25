@@ -1,0 +1,23 @@
+{
+  "dangerousCommands": [
+    {
+      "pattern": "\\becho SAFE_EXEC_TEST_RISKY\\b",
+      "description": "Fixture risky terminal command",
+      "risk": "high"
+    }
+  ],
+  "protectedCommands": [
+    {
+      "command": "safeExec.testProtectedFromFile",
+      "description": "Fixture protected command",
+      "risk": "medium"
+    }
+  ],
+  "editHeuristics": {
+    "minChangedCharacters": 5,
+    "minAffectedLines": 1,
+    "protectedPathPatterns": [
+      "(^|[\\\\/])test-protected\\.txt$"
+    ]
+  }
+}

@@ -7,6 +7,12 @@
   "engines": {
     "vscode": "^1.99.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Safe Exec can still show approval prompts and inspect editor changes in untrusted workspaces, but Workspace Trust is not a sandbox and guarded command coverage still depends on explicit proxy commands."
+    }
+  },
   "categories": [
     "Other"
   ],
@@ -15,6 +21,10 @@
     "onCommand:safeExec.toggleProtection",
     "onCommand:safeExec.openRulesFile",
     "onCommand:safeExec.showEffectiveRules",
+    "onCommand:safeExec.reloadRules",
+    "onCommand:safeExec.openOnboarding",
+    "onCommand:safeExec.installRecommendedKeybindings",
+    "onCommand:safeExec.showAuditHistory",
     "onCommand:safeExec.runProtectedCommand",
     "onCommand:safeExec.proxy.workbench.action.terminal.runSelectedText",
     "onCommand:safeExec.proxy.workbench.action.tasks.runTask",
@@ -38,6 +48,26 @@
         "category": "Safe Exec"
       },
       {
+        "command": "safeExec.reloadRules",
+        "title": "Safe Exec: Reload Rules",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.openOnboarding",
+        "title": "Safe Exec: Open Onboarding",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.installRecommendedKeybindings",
+        "title": "Safe Exec: Install Recommended Keybindings",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.showAuditHistory",
+        "title": "Safe Exec: Show Recent Activity",
+        "category": "Safe Exec"
+      },
+      {
         "command": "safeExec.runProtectedCommand",
         "title": "Safe Exec: Run Protected Command",
         "category": "Safe Exec"
@@ -58,6 +88,63 @@
         "category": "Safe Exec"
       }
     ],
+    "walkthroughs": [
+      {
+        "id": "safeExec.getStarted",
+        "title": "Get Started with Safe Exec",
+        "description": "Review the first-run guidance, wire proxy keybindings, and inspect recent Safe Exec activity.",
+        "steps": [
+          {
+            "id": "safeExec.reviewOnboarding",
+            "title": "Review the onboarding guide",
+            "description": "Open the onboarding guide to see what Safe Exec protects, what it does not protect, and how Workspace Trust fits in.",
+            "media": {
+              "image": "media/onboarding.svg",
+              "altText": "Illustrative Safe Exec onboarding guide"
+            },
+            "completionEvents": [
+              "onCommand:safeExec.openOnboarding"
+            ]
+          },
+          {
+            "id": "safeExec.installProxyKeybindings",
+            "title": "Review recommended proxy keybindings",
+            "description": "Open your user keybindings.json beside a recommended Safe Exec proxy snippet. Safe Exec does not edit keybindings automatically.",
+            "media": {
+              "image": "media/onboarding.svg",
+              "altText": "Illustrative Safe Exec keybinding setup"
+            },
+            "completionEvents": [
+              "onCommand:safeExec.installRecommendedKeybindings"
+            ]
+          },
+          {
+            "id": "safeExec.reviewDiffFlow",
+            "title": "Inspect the diff-based edit review flow",
+            "description": "Safe Exec rolls back suspicious edits first, then lets you review a real diff before reapplying.",
+            "media": {
+              "image": "media/diff-review.svg",
+              "altText": "Illustrative Safe Exec diff review"
+            },
+            "completionEvents": [
+              "onCommand:safeExec.openOnboarding"
+            ]
+          },
+          {
+            "id": "safeExec.openAuditHistory",
+            "title": "Open recent Safe Exec activity",
+            "description": "Review approvals, denials, degraded replays, and related best-effort status events for this workspace.",
+            "media": {
+              "image": "media/diff-review.svg",
+              "altText": "Illustrative Safe Exec audit history"
+            },
+            "completionEvents": [
+              "onCommand:safeExec.showAuditHistory"
+            ]
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "Safe Exec",
       "properties": {
@@ -70,6 +157,28 @@
           "type": "string",
           "default": ".vscode/safe-exec.rules.json",
           "description": "Workspace-relative or absolute path to the JSON rules file."
+        },
+        "safeExec.policyBundles": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "enum": [
+              "node-web",
+              "python",
+              "docker",
+              "terraform-kubernetes",
+              "git-ci"
+            ],
+            "enumDescriptions": [
+              "Protect common Node/web deploy and JavaScript toolchain surfaces.",
+              "Protect common Python packaging and environment surfaces.",
+              "Protect common Docker lifecycle and configuration surfaces.",
+              "Protect common Terraform, Helm, and Kubernetes mutation surfaces.",
+              "Protect common Git force-push and CI workflow surfaces."
+            ]
+          },
+          "description": "Opt-in Safe Exec policy bundle IDs. Built-in bundles include node-web, python, docker, terraform-kubernetes, and git-ci."
         },
         "safeExec.protectedCommands": {
           "type": "array",
@@ -94,21 +203,22 @@
         },
         "safeExec.editHeuristics.minChangedCharacters": {
           "type": "number",
-          "default": 200,
+          "default": 120,
           "minimum": 1,
           "description": "Minimum changed characters before Safe Exec asks for approval on edits."
         },
         "safeExec.editHeuristics.minAffectedLines": {
           "type": "number",
-          "default": 20,
+          "default": 8,
           "minimum": 1,
           "description": "Minimum affected lines before Safe Exec asks for approval on edits."
         },
         "safeExec.editHeuristics.maxPreviewCharacters": {
           "type": "number",
-          "default": 1600,
+          "default": 1500,
           "minimum": 200,
-          "description": "Maximum preview size shown in edit approval dialogs."
+          "description": "Legacy fallback preview size for suspicious edit review.",
+          "deprecationMessage": "Safe Exec now uses a full diff view for suspicious edit review. This setting is retained for compatibility and no longer affects the primary review flow."
         }
       }
     }
@@ -116,11 +226,16 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
     "vscode:prepublish": "npm run compile"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.15.2",
     "@types/vscode": "^1.99.0",
+    "@vscode/test-electron": "^2.5.2",
+    "mocha": "^11.7.5",
     "typescript": "^5.8.3"
   }
 }

@@ -1,0 +1,23 @@
+{
+  "policyBundles": ["python"],
+  "dangerousCommands": [
+    {
+      "pattern": "TEST_RULE_DESTROY",
+      "description": "Fixture-only dangerous command",
+      "risk": "critical"
+    }
+  ],
+  "protectedCommands": [
+    {
+      "command": "safeExec.fileProtected",
+      "description": "Fixture-only protected command",
+      "risk": "high"
+    }
+  ],
+  "editHeuristics": {
+    "minAffectedLines": 5,
+    "protectedPathPatterns": [
+      "CUSTOM_PROTECTED_PATH"
+    ]
+  }
+}

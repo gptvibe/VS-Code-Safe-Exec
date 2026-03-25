@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrative Safe Exec onboarding view</title>
+  <desc id="desc">An illustrative SVG mockup of the Safe Exec onboarding guide, keybinding advice, policy bundles, and status bar. It is not a real VS Code screenshot.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f7f1e8"/>
+      <stop offset="100%" stop-color="#e7efe6"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#20303b"/>
+      <stop offset="100%" stop-color="#172229"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#132029" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#bg)"/>
+  <text x="52" y="56" fill="#6c4a2e" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">Illustrative SVG only - not a captured VS Code screenshot</text>
+
+  <g filter="url(#shadow)">
+    <rect x="42" y="82" width="1196" height="662" rx="24" fill="#f6f7f3"/>
+    <rect x="42" y="82" width="1196" height="42" rx="24" fill="#dde5dd"/>
+    <circle cx="78" cy="103" r="7" fill="#dc6a5f"/>
+    <circle cx="101" cy="103" r="7" fill="#e1b74a"/>
+    <circle cx="124" cy="103" r="7" fill="#5cbf83"/>
+    <rect x="186" y="93" width="426" height="21" rx="10" fill="#eef3ed"/>
+    <text x="204" y="108" fill="#587166" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Safe Exec: Open Onboarding</text>
+
+    <rect x="42" y="124" width="235" height="620" fill="url(#panel)"/>
+    <text x="74" y="168" fill="#f4f2ea" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">SAFE EXEC</text>
+    <text x="74" y="196" fill="#c3d1ca" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="14">Best-effort approval layer</text>
+
+    <rect x="64" y="232" width="190" height="88" rx="18" fill="#28404e"/>
+    <text x="82" y="260" fill="#f5efe6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">What it protects</text>
+    <text x="82" y="286" fill="#d2e0d9" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Terminal approval</text>
+    <text x="82" y="306" fill="#d2e0d9" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Proxy commands</text>
+
+    <rect x="64" y="336" width="190" height="110" rx="18" fill="#533942"/>
+    <text x="82" y="364" fill="#fff0e5" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">What it is not</text>
+    <text x="82" y="391" fill="#f4d9d6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Not a sandbox</text>
+    <text x="82" y="411" fill="#f4d9d6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Not transparent override</text>
+    <text x="82" y="431" fill="#f4d9d6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Not exact shell restore</text>
+
+    <rect x="64" y="470" width="190" height="126" rx="18" fill="#324f3f"/>
+    <text x="82" y="498" fill="#eef7e8" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Bundles</text>
+    <text x="82" y="525" fill="#d6e8d2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">node-web</text>
+    <text x="82" y="545" fill="#d6e8d2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">python</text>
+    <text x="82" y="565" fill="#d6e8d2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">docker</text>
+    <text x="82" y="585" fill="#d6e8d2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">terraform-kubernetes</text>
+
+    <text x="312" y="180" fill="#223238" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="34" font-weight="700">Get Started with Safe Exec</text>
+    <text x="312" y="214" fill="#54686e" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">Review real limits, wire proxy shortcuts, and choose stack presets.</text>
+
+    <rect x="312" y="244" width="550" height="190" rx="22" fill="#ffffff"/>
+    <text x="340" y="284" fill="#1e2f38" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Onboarding guide</text>
+    <text x="340" y="318" fill="#596b70" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">Protection is currently enabled. Workspace Trust is untrusted.</text>
+    <text x="340" y="352" fill="#1e2f38" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">- Shell integration drives terminal matching when available</text>
+    <text x="340" y="378" fill="#1e2f38" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">- Proxy commands must be used for built-in command coverage</text>
+    <text x="340" y="404" fill="#1e2f38" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">- Suspicious edits roll back first, then open a diff review</text>
+
+    <rect x="888" y="244" width="304" height="190" rx="22" fill="#fff6e7"/>
+    <text x="914" y="284" fill="#6d4b16" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Proxy keybindings</text>
+    <text x="914" y="317" fill="#7d5e34" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Raw guarded binding found:</text>
+    <text x="914" y="343" fill="#432d0c" font-family="JetBrains Mono, Consolas, monospace" font-size="14">ctrl+enter - runSelectedText</text>
+    <text x="914" y="375" fill="#7d5e34" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Recommended replacement:</text>
+    <text x="914" y="401" fill="#432d0c" font-family="JetBrains Mono, Consolas, monospace" font-size="14">safeExec.proxy.workbench...</text>
+
+    <rect x="312" y="458" width="430" height="214" rx="22" fill="#f3faf5"/>
+    <text x="340" y="498" fill="#224033" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Recommended snippet</text>
+    <rect x="340" y="522" width="374" height="120" rx="16" fill="#173327"/>
+    <text x="360" y="553" fill="#cfead5" font-family="JetBrains Mono, Consolas, monospace" font-size="14">[</text>
+    <text x="360" y="578" fill="#cfead5" font-family="JetBrains Mono, Consolas, monospace" font-size="14">{ "key": "ctrl+enter",</text>
+    <text x="360" y="603" fill="#cfead5" font-family="JetBrains Mono, Consolas, monospace" font-size="14">  "command": "safeExec.proxy...",</text>
+    <text x="360" y="628" fill="#cfead5" font-family="JetBrains Mono, Consolas, monospace" font-size="14">  "when": "editorTextFocus" }</text>
+
+    <rect x="768" y="458" width="424" height="214" rx="22" fill="#f5f2ff"/>
+    <text x="796" y="498" fill="#2f3167" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="24" font-weight="700">Policy bundles</text>
+    <rect x="796" y="520" width="168" height="40" rx="20" fill="#dbdcff"/>
+    <text x="826" y="545" fill="#303672" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">node-web</text>
+    <rect x="978" y="520" width="168" height="40" rx="20" fill="#dbdcff"/>
+    <text x="1030" y="545" fill="#303672" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">git-ci</text>
+    <text x="796" y="587" fill="#49508b" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Adds deploy, publish, force-push, and CI-aware defaults.</text>
+    <text x="796" y="614" fill="#49508b" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Bundles are starter presets, not complete stack protection.</text>
+
+    <rect x="42" y="744" width="1196" height="28" rx="0" fill="#163f34"/>
+    <text x="66" y="763" fill="#d9f2e5" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">$(shield) Safe Exec</text>
+    <text x="216" y="763" fill="#a2cfbd" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Workspace Trust: untrusted. Best effort approval layer, not a sandbox.</text>
+    <text x="824" y="763" fill="#d7efe0" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Status bar opens onboarding and highlights missing proxy coverage</text>
+  </g>
+</svg>

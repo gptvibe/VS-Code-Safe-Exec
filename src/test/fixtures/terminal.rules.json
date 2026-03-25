@@ -1,0 +1,9 @@
+{
+  "dangerousCommands": [
+    {
+      "pattern": "SAFE_EXEC_TEST_RISKY",
+      "description": "Fixture-only terminal rule",
+      "risk": "critical"
+    }
+  ]
+}
