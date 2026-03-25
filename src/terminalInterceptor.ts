@@ -36,9 +36,10 @@ interface ReplayContext {
 
 interface StopResult {
   stopped: boolean;
-  interrupted: boolean;
+  interruptAttempted: boolean;
   usedInterrupt: boolean;
   interruptError?: string;
+  disposeAttempted: boolean;
   disposeError?: string;
   terminalStillPresent: boolean;
 }
@@ -127,7 +128,7 @@ export class TerminalInterceptor {
 
     this.pendingPrompts.add(context.terminal);
     this.options.auditLog.record({
-      action: "intercepted",
+      action: "matched",
       surface: "terminal",
       source: `terminal:${context.terminal.name}`,
       summary: match.normalizedCommand,
@@ -174,31 +175,40 @@ export class TerminalInterceptor {
     const stopResult = await this.stopTerminal(context.terminal);
     const degradedContext = this.getContextWarnings(replayContext);
 
-    if (stopResult.interrupted) {
+    if (stopResult.interruptAttempted) {
       this.options.auditLog.record({
-        action: "interrupted",
+        action: "interrupted-attempted",
         surface: "terminal",
         source: `terminal:${context.terminal.name}`,
         summary: match.normalizedCommand,
-        detail: `Kill strategy: ${this.options.getKillStrategy()}`,
+        detail: stopResult.interruptError
+          ? `Interrupt attempt failed before replay: ${stopResult.interruptError}`
+          : `Interrupt attempt sent before replay using ${this.options.getKillStrategy()}.`,
         metadata: {
           usedInterrupt: stopResult.usedInterrupt,
-          terminalStillPresent: stopResult.terminalStillPresent
-        }
-      });
-    } else {
-      this.options.auditLog.record({
-        action: "failed-to-stop",
-        surface: "terminal",
-        source: `terminal:${context.terminal.name}`,
-        summary: match.normalizedCommand,
-        detail: buildStopFailureDetail(stopResult),
-        metadata: {
-          usedInterrupt: stopResult.usedInterrupt,
-          terminalStillPresent: stopResult.terminalStillPresent
+          terminalStillPresent: stopResult.terminalStillPresent,
+          interruptFailed: Boolean(stopResult.interruptError)
         }
       });
     }
+
+    this.options.auditLog.record({
+      action: "dispose-attempted",
+      surface: "terminal",
+      source: `terminal:${context.terminal.name}`,
+      summary: match.normalizedCommand,
+      detail: stopResult.disposeError
+        ? `Dispose attempt failed before replay: ${stopResult.disposeError}`
+        : stopResult.stopped
+        ? "Disposed original terminal before replay."
+        : "Dispose was attempted, but Safe Exec could not confirm the original terminal stopped cleanly.",
+      metadata: {
+        usedInterrupt: stopResult.usedInterrupt,
+        terminalStillPresent: stopResult.terminalStillPresent,
+        disposeFailed: Boolean(stopResult.disposeError),
+        stopped: stopResult.stopped
+      }
+    });
 
     const detailLines = [
       `Matched ${match.bucket}: ${match.rule.description ?? "custom terminal rule"}`,
@@ -217,6 +227,7 @@ export class TerminalInterceptor {
     if (degradedContext.length > 0) {
       detailLines.push("Degraded replay context:");
       detailLines.push(...degradedContext.map((reason) => `- ${reason}`));
+      this.log(`Replay context warnings for "${context.terminal.name}": ${degradedContext.join("; ")}`);
     }
 
     const approved = await this.options.permissionUI.requestApproval({
@@ -276,13 +287,14 @@ export class TerminalInterceptor {
             degradationCount: replay.degradedReasons.length
           }
         });
+        this.log(`Replayed with degraded context in "${replay.terminal.name}": ${replay.degradedReasons.join("; ")}`);
       }
 
       this.log(`Replayed approved command in "${replay.terminal.name}" via ${replay.mode}: ${match.normalizedCommand}`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.options.auditLog.record({
-        action: "failed",
+        action: "replay-failed",
         surface: "terminal",
         source: `terminal:${context.terminal.name}`,
         summary: match.normalizedCommand,
@@ -306,13 +318,15 @@ export class TerminalInterceptor {
   private async stopTerminal(terminal: vscode.Terminal): Promise<StopResult> {
     const result: StopResult = {
       stopped: false,
-      interrupted: false,
+      interruptAttempted: false,
       usedInterrupt: false,
+      disposeAttempted: false,
       terminalStillPresent: true
     };
 
     if (this.options.getKillStrategy() === "interruptThenDispose") {
       result.usedInterrupt = true;
+      result.interruptAttempted = true;
       try {
         terminal.show(true);
         await vscode.commands.executeCommand("workbench.action.terminal.sendSequence", { text: "\u0003" });
@@ -324,6 +338,7 @@ export class TerminalInterceptor {
       await delay(INTERRUPT_WAIT_MS);
     }
 
+    result.disposeAttempted = true;
     try {
       terminal.dispose();
     } catch (error) {
@@ -334,7 +349,6 @@ export class TerminalInterceptor {
     await delay(DISPOSE_WAIT_MS);
     result.terminalStillPresent = vscode.window.terminals.includes(terminal);
     result.stopped = !result.terminalStillPresent && !result.disposeError;
-    result.interrupted = result.stopped;
     return result;
   }
 
@@ -550,16 +564,6 @@ function getLaunchCwd(
   }
 
   return creationOptions.cwd;
-}
-
-function buildStopFailureDetail(result: StopResult): string {
-  const reasons = [
-    result.interruptError ? `interrupt failed: ${result.interruptError}` : undefined,
-    result.disposeError ? `dispose failed: ${result.disposeError}` : undefined,
-    result.terminalStillPresent ? "terminal still appears present after dispose" : undefined
-  ].filter((value): value is string => Boolean(value));
-
-  return reasons.join("; ") || "Safe Exec could not confirm the original terminal stopped.";
 }
 
 function confidenceLabel(confidence: vscode.TerminalShellExecutionCommandLineConfidence): string {

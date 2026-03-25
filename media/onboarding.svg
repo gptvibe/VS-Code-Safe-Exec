@@ -86,6 +86,6 @@
     <rect x="42" y="744" width="1196" height="28" rx="0" fill="#163f34"/>
     <text x="66" y="763" fill="#d9f2e5" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">$(shield) Safe Exec</text>
     <text x="216" y="763" fill="#a2cfbd" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Workspace Trust: untrusted. Best effort approval layer, not a sandbox.</text>
-    <text x="824" y="763" fill="#d7efe0" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Status bar opens onboarding and highlights missing proxy coverage</text>
+    <text x="768" y="763" fill="#d7efe0" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Status bar opens the Safe Exec main command and highlights missing proxy coverage</text>
   </g>
 </svg>

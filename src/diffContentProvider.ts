@@ -26,6 +26,7 @@ export interface CreateDiffSessionOptions {
 }
 
 export class DiffContentProvider implements vscode.TextDocumentContentProvider, vscode.Disposable {
+  private static readonly MAX_SESSIONS = 20;
   private readonly sessions = new Map<string, DiffSessionContent>();
   private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
 
@@ -47,6 +48,7 @@ export class DiffContentProvider implements vscode.TextDocumentContentProvider, 
       after: options.after,
       title: options.title
     });
+    this.evictOldestSessions();
 
     const fileName = path.basename(options.resource.fsPath || options.resource.path || "review.txt");
     const beforeUri = createDiffUri(id, "before", fileName);
@@ -88,6 +90,17 @@ export class DiffContentProvider implements vscode.TextDocumentContentProvider, 
     }
 
     return side === "before" ? session.before : session.after;
+  }
+
+  private evictOldestSessions(): void {
+    while (this.sessions.size > DiffContentProvider.MAX_SESSIONS) {
+      const oldestKey = this.sessions.keys().next().value;
+      if (!oldestKey) {
+        return;
+      }
+
+      this.sessions.delete(oldestKey);
+    }
   }
 }
 

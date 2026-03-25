@@ -3,11 +3,6 @@ import * as vscode from "vscode";
 import { activateExtension, resetTestState, waitForAuditEvent, writeWorkspaceSettings } from "./helpers";
 
 suite("protected commands", () => {
-  teardown(async () => {
-    const api = await activateExtension();
-    await resetTestState(api);
-  });
-
   test("runs an approved protected command through the wrapper", async () => {
     const api = await activateExtension();
     await resetTestState(api);

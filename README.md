@@ -22,6 +22,10 @@ _Illustrative SVG, not a captured VS Code screenshot._
 
 _Illustrative SVG, not a captured VS Code screenshot._
 
+![Illustrative Safe Exec status bar and keybinding guidance](media/status-keybindings.svg)
+
+_Illustrative SVG, not a captured VS Code screenshot._
+
 ## What Safe Exec protects
 
 ### 1. Risky terminal commands
@@ -47,9 +51,10 @@ Important: terminal handling is post-start, not pre-execution blocking. A risky 
 Safe Exec snapshots open text documents. When an edit crosses configured thresholds, uses many edit ranges, or touches a protected path, it:
 
 1. restores the previous snapshot
-2. opens a real VS Code diff review on demand
-3. reapplies only the captured edit ranges when you approve
-4. falls back to whole-document replacement only if range-based reapply fails
+2. offers `Review Diff`, `Reapply Edit`, and `Deny`
+3. opens a real VS Code diff review on demand
+4. reapplies only the captured edit ranges when you approve
+5. falls back to whole-document replacement only if range-based reapply is not possible
 
 If the document changes while approval is pending, Safe Exec does not overwrite the newer content. It keeps the rollback, shows a clear conflict message, and asks the user to reapply manually if they still want the change.
 
@@ -68,11 +73,12 @@ If a user or agent invokes the raw built-in command instead of the proxy, Safe E
 
 ## First-run and onboarding
 
-Safe Exec now includes a first-run onboarding flow and a native walkthrough:
+Safe Exec now includes a first-run onboarding flow, a main command, and a native walkthrough:
 
+- `Safe Exec: Open Safe Exec`
 - `Safe Exec: Open Onboarding`
 - `Get Started with Safe Exec`
-- `Safe Exec: Install Recommended Keybindings`
+- `Safe Exec: Open Recommended Proxy Keybindings`
 
 The onboarding guide explains:
 
@@ -82,7 +88,7 @@ The onboarding guide explains:
 - which proxy keybindings are recommended
 - which policy bundles are available
 
-Safe Exec can inspect the user `keybindings.json` file and warn when common raw guarded commands are bound directly without an equivalent Safe Exec proxy binding. It opens a recommended JSON snippet beside the user keybindings file, but it does not edit keybindings automatically.
+Safe Exec can inspect the user `keybindings.json` file, warn when common raw guarded commands are bound directly without an equivalent Safe Exec proxy binding, and call out when common guarded commands still have no proxy shortcut at all. It opens a recommended JSON snippet beside the user keybindings file, but it does not edit keybindings automatically.
 
 ## Status bar and recent activity
 
@@ -93,20 +99,13 @@ Safe Exec shows a status bar item that surfaces whether protection is:
 - running in an untrusted workspace
 - missing recommended proxy keybinding coverage
 
-The status bar opens onboarding, and `Safe Exec: Show Recent Activity` opens a local per-workspace audit history. That history is useful for review and debugging, but it is not tamper-proof and should not be treated as a forensic record.
+The status bar opens the Safe Exec main command, and `Safe Exec: Show Recent Activity` opens a local per-workspace audit history. That history is useful for review and debugging, but it is not tamper-proof and should not be treated as a forensic record.
 
 Structured audit events include:
 
-- `intercepted`
-- `interrupted`
-- `approved`
-- `replayed`
-- `replay-degraded`
-- `denied`
-- `failed-to-stop`
-- `failed`
-- `conflict`
-- `status`
+- terminal outcomes such as `matched`, `interrupted-attempted`, `dispose-attempted`, `approved`, `denied`, `replayed`, `replay-degraded`, and `replay-failed`
+- edit outcomes such as `intercepted`, `reviewed`, `approved`, `range-based`, `whole-document-fallback`, `conflict-cancelled`, and `failed`
+- workspace and command status events such as `status`
 
 ## Workspace Trust
 
@@ -144,8 +143,8 @@ You can enable bundles in either VS Code settings or `.vscode/safe-exec.rules.js
 ## Quick start
 
 1. Install the extension.
-2. Open `Safe Exec: Open Onboarding`.
-3. Review `Safe Exec: Install Recommended Keybindings` and wire proxy commands for the shortcuts you actually use.
+2. Open `Safe Exec: Open Safe Exec` or click the Safe Exec status bar item.
+3. Review `Safe Exec: Open Recommended Proxy Keybindings` and wire proxy commands for the shortcuts you actually use.
 4. Open `Safe Exec: Open Rules File` and enable any policy bundles that match your stack.
 5. Keep an eye on the status bar state and `Safe Exec: Show Recent Activity`.
 

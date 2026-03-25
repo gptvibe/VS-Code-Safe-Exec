@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrative Safe Exec status bar and keybinding guidance</title>
+  <desc id="desc">An illustrative SVG mockup showing the Safe Exec status bar item, the main command palette menu, and recommended proxy keybindings. It is not a real VS Code screenshot.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4ede4"/>
+      <stop offset="100%" stop-color="#e4eef0"/>
+    </linearGradient>
+    <linearGradient id="sidebar" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22303a"/>
+      <stop offset="100%" stop-color="#172129"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#14202b" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#bg)"/>
+  <text x="52" y="56" fill="#6d5034" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="18" font-weight="700">Illustrative SVG only - not a captured VS Code screenshot</text>
+
+  <g filter="url(#shadow)">
+    <rect x="42" y="82" width="1196" height="662" rx="24" fill="#f8f9f6"/>
+    <rect x="42" y="82" width="1196" height="42" rx="24" fill="#dde5ea"/>
+    <circle cx="78" cy="103" r="7" fill="#dc6a5f"/>
+    <circle cx="101" cy="103" r="7" fill="#e1b74a"/>
+    <circle cx="124" cy="103" r="7" fill="#5cbf83"/>
+    <rect x="184" y="93" width="452" height="21" rx="10" fill="#edf2f4"/>
+    <text x="202" y="108" fill="#5c6d78" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Safe Exec: Open Safe Exec</text>
+
+    <rect x="42" y="124" width="228" height="620" fill="url(#sidebar)"/>
+    <text x="70" y="170" fill="#f4f2ea" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">SAFE EXEC</text>
+    <text x="70" y="198" fill="#c3d1ca" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="14">Main command and proxy adoption help</text>
+
+    <rect x="66" y="236" width="180" height="86" rx="18" fill="#2a4553"/>
+    <text x="84" y="264" fill="#f5efe6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Status item</text>
+    <text x="84" y="290" fill="#d2e0d9" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Opens the main Safe Exec menu</text>
+    <text x="84" y="310" fill="#d2e0d9" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Shows coverage warnings in tooltip</text>
+
+    <rect x="66" y="340" width="180" height="102" rx="18" fill="#5b3f47"/>
+    <text x="84" y="368" fill="#fff0e5" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Proxy advice</text>
+    <text x="84" y="395" fill="#f4d9d6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Warn on raw guarded shortcuts</text>
+    <text x="84" y="415" fill="#f4d9d6" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Call out missing proxy bindings</text>
+
+    <rect x="66" y="462" width="180" height="108" rx="18" fill="#35523f"/>
+    <text x="84" y="490" fill="#eef7e8" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Manual by design</text>
+    <text x="84" y="517" fill="#d6e8d2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Opens keybindings.json</text>
+    <text x="84" y="537" fill="#d6e8d2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Does not rewrite shortcuts for you</text>
+
+    <rect x="308" y="152" width="410" height="362" rx="22" fill="#ffffff"/>
+    <text x="338" y="194" fill="#21333c" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="26" font-weight="700">Main command</text>
+    <text x="338" y="226" fill="#657880" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Status bar click opens onboarding, rules, audit history, and proxy setup.</text>
+    <rect x="338" y="252" width="350" height="48" rx="16" fill="#eef4f6"/>
+    <text x="362" y="282" fill="#304550" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Open Onboarding</text>
+    <rect x="338" y="312" width="350" height="48" rx="16" fill="#eef4f6"/>
+    <text x="362" y="342" fill="#304550" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Review Proxy Keybindings</text>
+    <rect x="338" y="372" width="350" height="48" rx="16" fill="#eef4f6"/>
+    <text x="362" y="402" fill="#304550" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Open Rules File</text>
+    <rect x="338" y="432" width="350" height="48" rx="16" fill="#eef4f6"/>
+    <text x="362" y="462" fill="#304550" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16" font-weight="700">Show Recent Activity</text>
+
+    <rect x="748" y="152" width="444" height="260" rx="22" fill="#fff7ea"/>
+    <text x="778" y="194" fill="#6d4b16" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="26" font-weight="700">Keybinding diagnostics</text>
+    <text x="778" y="226" fill="#7d5e34" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Warnings for direct bypasses, plus adoption advisories when proxies are still missing.</text>
+    <rect x="778" y="252" width="384" height="42" rx="14" fill="#f6e1c2"/>
+    <text x="798" y="279" fill="#66421a" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Warning: ctrl+enter still targets runSelectedText directly</text>
+    <rect x="778" y="308" width="384" height="42" rx="14" fill="#efe8d7"/>
+    <text x="798" y="335" fill="#655746" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15">Advisory: no Safe Exec proxy binding exists yet for Run Task</text>
+    <rect x="778" y="364" width="384" height="20" rx="10" fill="#d9ccaf"/>
+    <text x="796" y="379" fill="#6a5636" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="12">Open Recommended Proxy Keybindings leaves editing fully manual</text>
+
+    <rect x="308" y="540" width="884" height="146" rx="22" fill="#f1f7fa"/>
+    <text x="338" y="582" fill="#22343d" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="26" font-weight="700">Recommended proxy snippet</text>
+    <rect x="338" y="606" width="824" height="54" rx="16" fill="#182b30"/>
+    <text x="360" y="639" fill="#cfe6e8" font-family="JetBrains Mono, Consolas, monospace" font-size="14">[{ "key": "ctrl+enter", "command": "safeExec.proxy.workbench.action.terminal.runSelectedText", "when": "editorTextFocus && editorHasSelection" }]</text>
+
+    <rect x="42" y="744" width="1196" height="28" fill="#183f35"/>
+    <text x="66" y="763" fill="#d9f2e5" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">$(shield) Safe Exec</text>
+    <text x="216" y="763" fill="#a2cfbd" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="13">Click to open Safe Exec. Proxy coverage warnings stay visible without claiming transparent interception.</text>
+  </g>
+</svg>

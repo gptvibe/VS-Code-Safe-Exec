@@ -30,6 +30,13 @@ export interface ApprovalResponder {
   requestDecision(request: PermissionRequest): Promise<ApprovalDecision>;
 }
 
+export interface DeferredApprovalHandle {
+  resolve: (decision: ApprovalDecision) => void;
+  allow: () => void;
+  deny: () => void;
+  review: () => void;
+}
+
 export class PermissionUI {
   public constructor(
     private readonly output: vscode.OutputChannel,
@@ -113,15 +120,14 @@ class ModalApprovalResponder implements ApprovalResponder {
       request.detail ?? ""
     ].filter((line) => line.trim().length > 0);
 
+    const actions = reviewLabel ? [reviewLabel, allowLabel, denyLabel] : [allowLabel, denyLabel];
     const selection = await vscode.window.showWarningMessage(
       request.summary,
       {
         modal: true,
         detail: detailLines.join("\n")
       },
-      allowLabel,
-      ...(reviewLabel ? [reviewLabel] : []),
-      denyLabel
+      ...actions
     );
 
     if (selection === allowLabel) {
@@ -137,10 +143,35 @@ class ModalApprovalResponder implements ApprovalResponder {
 }
 
 export class ScriptedApprovalResponder implements ApprovalResponder {
-  private readonly decisions: ApprovalDecision[] = [];
+  private readonly decisions: Array<ApprovalDecision | { promise: Promise<ApprovalDecision> }> = [];
 
   public enqueue(decision: ApprovalDecision): void {
     this.decisions.push(decision);
+  }
+
+  public enqueueDeferred(): DeferredApprovalHandle {
+    let settled = false;
+    let resolveDecision: ((decision: ApprovalDecision) => void) | undefined;
+    const promise = new Promise<ApprovalDecision>((resolve) => {
+      resolveDecision = resolve;
+    });
+
+    const resolve = (decision: ApprovalDecision): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolveDecision?.(decision);
+    };
+
+    this.decisions.push({ promise });
+    return {
+      resolve,
+      allow: () => resolve("allow"),
+      deny: () => resolve("deny"),
+      review: () => resolve("review")
+    };
   }
 
   public reset(): void {
@@ -148,6 +179,15 @@ export class ScriptedApprovalResponder implements ApprovalResponder {
   }
 
   public async requestDecision(): Promise<ApprovalDecision> {
-    return this.decisions.shift() ?? "deny";
+    const next = this.decisions.shift();
+    if (!next) {
+      return "deny";
+    }
+
+    if (typeof next === "string") {
+      return next;
+    }
+
+    return next.promise;
   }
 }

@@ -30,7 +30,7 @@ Safe Exec then tries to interrupt and dispose the original terminal and replays 
 
 ### Suspicious edits
 
-Safe Exec watches text-document change events, which are post-change. It snapshots file contents, rolls back suspicious edits, shows a real diff review, and reapplies only the captured change if approved.
+Safe Exec watches text-document change events, which are post-change. It snapshots file contents, rolls back suspicious edits, offers `Review Diff`, `Reapply Edit`, and `Deny`, and reapplies the captured ranges by default when approval is granted. Whole-document replacement is fallback only.
 
 ### Protected commands
 
@@ -90,16 +90,9 @@ Workspace Trust can reduce some VS Code behavior. It does not isolate the shell,
 
 Safe Exec records local per-workspace history for events such as:
 
-- `intercepted`
-- `interrupted`
-- `approved`
-- `replayed`
-- `replay-degraded`
-- `denied`
-- `failed-to-stop`
-- `failed`
-- `conflict`
-- `status`
+- terminal outcomes like `matched`, `interrupted-attempted`, `dispose-attempted`, `approved`, `denied`, `replayed`, `replay-degraded`, and `replay-failed`
+- edit outcomes like `intercepted`, `reviewed`, `approved`, `range-based`, `whole-document-fallback`, `conflict-cancelled`, and `failed`
+- status events like `status`
 
 Important limits:
 

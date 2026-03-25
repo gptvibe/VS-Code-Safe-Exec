@@ -4,11 +4,6 @@ import { loadEffectiveRules } from "../../rules";
 import { activateExtension, getFixturePath, resetTestState, writeWorkspaceSettings } from "./helpers";
 
 suite("rule loading", () => {
-  teardown(async () => {
-    const api = await activateExtension();
-    await resetTestState(api);
-  });
-
   test("merges defaults, workspace rules, and settings", async () => {
     const api = await activateExtension();
     await resetTestState(api);

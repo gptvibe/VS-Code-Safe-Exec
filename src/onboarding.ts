@@ -44,6 +44,7 @@ export function createOnboardingMarkdown(options: {
     "",
     "## Suggested Next Steps",
     "",
+    "- Use `Safe Exec: Open Safe Exec` or click the status bar item to reach onboarding, rules, keybinding help, and recent activity.",
     "- Review or create `.vscode/safe-exec.rules.json`.",
     "- Wire common shortcuts to Safe Exec proxy commands.",
     "- Enable policy bundles that match your stack.",

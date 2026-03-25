@@ -18,6 +18,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
+    "onCommand:safeExec.openMainMenu",
     "onCommand:safeExec.toggleProtection",
     "onCommand:safeExec.openRulesFile",
     "onCommand:safeExec.showEffectiveRules",
@@ -32,6 +33,11 @@
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "safeExec.openMainMenu",
+        "title": "Safe Exec: Open Safe Exec",
+        "category": "Safe Exec"
+      },
       {
         "command": "safeExec.toggleProtection",
         "title": "Safe Exec: Toggle Protection",
@@ -59,7 +65,7 @@
       },
       {
         "command": "safeExec.installRecommendedKeybindings",
-        "title": "Safe Exec: Install Recommended Keybindings",
+        "title": "Safe Exec: Open Recommended Proxy Keybindings",
         "category": "Safe Exec"
       },
       {
@@ -111,8 +117,8 @@
             "title": "Review recommended proxy keybindings",
             "description": "Open your user keybindings.json beside a recommended Safe Exec proxy snippet. Safe Exec does not edit keybindings automatically.",
             "media": {
-              "image": "media/onboarding.svg",
-              "altText": "Illustrative Safe Exec keybinding setup"
+              "image": "media/status-keybindings.svg",
+              "altText": "Illustrative Safe Exec status and keybinding guidance"
             },
             "completionEvents": [
               "onCommand:safeExec.installRecommendedKeybindings"

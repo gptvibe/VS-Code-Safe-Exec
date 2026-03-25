@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { AuditLog } from "./auditLog";
-import { DiffContentProvider } from "./diffContentProvider";
+import { DiffContentProvider, DiffSessionHandle } from "./diffContentProvider";
 import { PermissionUI } from "./permissionUI";
 import { EditHeuristics, RiskLevel, SafeExecRules, matchesAnyRegexPattern } from "./rules";
 
@@ -45,6 +45,8 @@ interface SuspiciousEditEvaluation {
   risk: RiskLevel;
 }
 
+type ReapplyOutcome = "range-based" | "whole-document-fallback" | "conflict-cancelled" | "failed";
+
 export class EditInterceptor {
   private static readonly DUPLICATE_SUPPRESSION_WINDOW_MS = 2000;
   private readonly snapshots = new Map<string, DocumentSnapshot>();
@@ -53,8 +55,13 @@ export class EditInterceptor {
   private readonly mutedTexts = new Map<string, string[]>();
   private readonly approvalsInFlight = new Set<string>();
   private readonly recentlyHandledEdits = new Map<string, HandledEditSignature[]>();
+  private forceNextRangeReapplyFailure = false;
 
   public constructor(private readonly options: EditInterceptorOptions) {}
+
+  public forceNextRangeReapplyFailureForTesting(): void {
+    this.forceNextRangeReapplyFailure = true;
+  }
 
   public register(): vscode.Disposable {
     for (const document of vscode.workspace.textDocuments) {
@@ -266,7 +273,6 @@ export class EditInterceptor {
       return;
     }
 
-    const rolledBackDocument = await vscode.workspace.openTextDocument(document.uri);
     const rollbackSettled = await this.waitForDocumentText(document.uri, previousSnapshot.text);
     if (!rollbackSettled) {
       this.log(`Rollback did not settle for ${document.uri.toString()}; leaving document in the last observed state.`);
@@ -277,10 +283,12 @@ export class EditInterceptor {
         summary: `Rollback could not be confirmed in ${relativePath}`,
         risk: evaluation.risk
       });
-      this.captureSnapshot(rolledBackDocument);
+      const lastObservedDocument = await vscode.workspace.openTextDocument(document.uri);
+      this.captureSnapshot(lastObservedDocument);
       return;
     }
 
+    const rolledBackDocument = await vscode.workspace.openTextDocument(document.uri);
     const rollbackVersion = rolledBackDocument.version;
     this.captureSnapshot(rolledBackDocument);
 
@@ -291,32 +299,33 @@ export class EditInterceptor {
       after: event.newText
     });
 
-    const approved = await (async () => {
-      try {
-        return await this.options.permissionUI.requestApproval({
-          title: "Reapply suspicious edit?",
-          source: `edit:${relativePath}`,
-          risk: evaluation.risk,
-          summary: `Safe Exec rolled back a large or sensitive edit in ${relativePath}.`,
-          detail: [
-            `Reasons: ${evaluation.reasons.join("; ")}`,
-            `Changed characters: ${evaluation.changedCharacters}`,
-            `Affected lines: ${evaluation.affectedLines}`,
-            "This is a post-change rollback flow. VS Code applied the edit first, Safe Exec restored the previous snapshot, and approval reapplies the captured change."
-          ].join("\n"),
-          reviewAction: {
-            label: "Open Diff",
-            open: async () => {
-              await this.options.diffContentProvider.openDiff(diffSession);
-            }
-          },
-          allowLabel: "Reapply Edit",
-          denyLabel: "Keep Rollback"
-        });
-      } finally {
-        diffSession.dispose();
-      }
-    })();
+    const approved = await this.options.permissionUI.requestApproval({
+      title: "Reapply suspicious edit after rollback?",
+      source: `edit:${relativePath}`,
+      risk: evaluation.risk,
+      summary: `Safe Exec rolled back a large or sensitive edit in ${relativePath}.`,
+      detail: [
+        `Reasons: ${evaluation.reasons.join("; ")}`,
+        `Changed characters: ${evaluation.changedCharacters}`,
+        `Affected lines: ${evaluation.affectedLines}`,
+        "This is a post-change rollback-and-reapply flow. VS Code applied the edit first, Safe Exec restored the previous snapshot, and approval replays the captured edit."
+      ].join("\n"),
+      reviewAction: {
+        label: "Review Diff",
+        open: async () => {
+          this.options.auditLog.record({
+            action: "reviewed",
+            surface: "edit",
+            source: `edit:${relativePath}`,
+            summary: `Reviewed suspicious edit diff for ${relativePath}`,
+            risk: evaluation.risk
+          });
+          await this.options.diffContentProvider.openDiff(diffSession);
+        }
+      },
+      allowLabel: "Reapply Edit",
+      denyLabel: "Deny"
+    });
 
     const currentDocument = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === document.uri.toString());
     if (!currentDocument) {
@@ -330,7 +339,10 @@ export class EditInterceptor {
         surface: "edit",
         source: `edit:${relativePath}`,
         summary: `Kept rollback in ${relativePath}`,
-        risk: evaluation.risk
+        risk: evaluation.risk,
+        metadata: {
+          reapplyOutcome: "denied"
+        }
       });
       this.captureSnapshot(currentDocument);
       return;
@@ -344,41 +356,102 @@ export class EditInterceptor {
       risk: evaluation.risk
     });
 
-    if (currentDocument.version !== rollbackVersion) {
-      const message = `Safe Exec kept the rollback for ${relativePath} because the document changed while approval was pending. Review the diff and reapply manually if you still want it.`;
+    if (currentDocument.version !== rollbackVersion || currentDocument.getText() !== previousSnapshot.text) {
       this.log(`Skipping reapply for ${document.uri.toString()} because the document changed during approval.`);
       this.options.auditLog.record({
-        action: "conflict",
+        action: "conflict-cancelled",
         surface: "edit",
         source: `edit:${relativePath}`,
-        summary: `Skipped reapply in ${relativePath} after a conflicting edit`,
-        risk: evaluation.risk
+        summary: `Kept rollback in ${relativePath} after a conflicting edit`,
+        risk: evaluation.risk,
+        metadata: {
+          reapplyOutcome: "conflict-cancelled"
+        }
       });
-      void vscode.window.showWarningMessage(message, { modal: true });
+      await this.showConflictWarning(relativePath, diffSession);
       this.captureSnapshot(currentDocument);
       return;
     }
 
-    const reapplied = await this.reapplyCapturedChanges(currentDocument, event);
-    if (!reapplied) {
+    const reapplyOutcome = await this.reapplyCapturedChanges(currentDocument, previousSnapshot, event);
+    if (reapplyOutcome === "conflict-cancelled") {
+      this.log(`Keeping rollback for ${document.uri.toString()} because the document no longer matched the rollback snapshot.`);
+      this.options.auditLog.record({
+        action: "conflict-cancelled",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Kept rollback in ${relativePath} because the document changed before reapply`,
+        risk: evaluation.risk,
+        metadata: {
+          reapplyOutcome
+        }
+      });
+      await this.showConflictWarning(relativePath, diffSession);
+      this.captureSnapshot(currentDocument);
+      return;
+    }
+
+    if (reapplyOutcome === "failed") {
       this.log(`Failed to reapply approved edit for ${document.uri.toString()}.`);
       this.options.auditLog.record({
         action: "failed",
         surface: "edit",
         source: `edit:${relativePath}`,
         summary: `Failed to reapply approved edit in ${relativePath}`,
-        risk: evaluation.risk
+        risk: evaluation.risk,
+        metadata: {
+          reapplyOutcome
+        }
       });
       this.captureSnapshot(currentDocument);
       return;
     }
 
-    this.log(`Reapplied approved edit in ${document.uri.toString()}.`);
+    if (reapplyOutcome === "range-based") {
+      this.log(`Reapplied approved edit in ${document.uri.toString()} using captured ranges.`);
+      this.options.auditLog.record({
+        action: "range-based",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Reapplied suspicious edit in ${relativePath} using captured ranges`,
+        risk: evaluation.risk,
+        metadata: {
+          reapplyOutcome,
+          rangeCount: event.changes.length
+        }
+      });
+    } else {
+      this.log(`Reapplied approved edit in ${document.uri.toString()} with a whole-document fallback.`);
+      this.options.auditLog.record({
+        action: "whole-document-fallback",
+        surface: "edit",
+        source: `edit:${relativePath}`,
+        summary: `Reapplied suspicious edit in ${relativePath} with a whole-document fallback`,
+        risk: evaluation.risk,
+        metadata: {
+          reapplyOutcome,
+          rangeCount: event.changes.length
+        }
+      });
+    }
+
     const refreshedDocument = await vscode.workspace.openTextDocument(document.uri);
     this.captureSnapshot(refreshedDocument);
   }
 
-  private async reapplyCapturedChanges(document: vscode.TextDocument, event: CapturedChangeEvent): Promise<boolean> {
+  private async reapplyCapturedChanges(
+    document: vscode.TextDocument,
+    previousSnapshot: DocumentSnapshot,
+    event: CapturedChangeEvent
+  ): Promise<ReapplyOutcome> {
+    if (document.getText() !== previousSnapshot.text) {
+      return "conflict-cancelled";
+    }
+
+    if (!this.canSafelyReapplyRanges(document, previousSnapshot, event) || this.consumeForcedRangeReapplyFailure()) {
+      return this.reapplyWholeDocumentFallback(document.uri, previousSnapshot.text, event.newText);
+    }
+
     const key = this.getKey(document.uri);
     const edit = new vscode.WorkspaceEdit();
     for (const change of event.changes) {
@@ -388,13 +461,103 @@ export class EditInterceptor {
     this.queueMutedText(key, event.newText);
     this.incrementMute(key);
     const appliedRanges = await vscode.workspace.applyEdit(edit);
-    if (appliedRanges) {
-      return this.waitForDocumentText(document.uri, event.newText);
+    if (!appliedRanges) {
+      this.decrementMute(key);
+      this.discardMutedText(key, event.newText);
+      return this.reapplyWholeDocumentFallback(document.uri, previousSnapshot.text, event.newText);
     }
 
-    this.decrementMute(key);
-    this.discardMutedText(key, event.newText);
-    return this.replaceWholeDocument(document, event.newText);
+    if (await this.waitForDocumentText(document.uri, event.newText)) {
+      return "range-based";
+    }
+
+    const refreshedDocument = await vscode.workspace.openTextDocument(document.uri);
+    if (refreshedDocument.getText() === event.newText) {
+      return "range-based";
+    }
+
+    return refreshedDocument.getText() === previousSnapshot.text ? "failed" : "conflict-cancelled";
+  }
+
+  private async reapplyWholeDocumentFallback(
+    uri: vscode.Uri,
+    expectedRollbackText: string,
+    targetText: string
+  ): Promise<ReapplyOutcome> {
+    let currentDocument = await vscode.workspace.openTextDocument(uri);
+    if (currentDocument.getText() !== expectedRollbackText) {
+      return currentDocument.getText() === targetText ? "whole-document-fallback" : "conflict-cancelled";
+    }
+
+    if (await this.replaceWholeDocument(currentDocument, targetText)) {
+      return "whole-document-fallback";
+    }
+
+    currentDocument = await vscode.workspace.openTextDocument(uri);
+    if (currentDocument.getText() !== expectedRollbackText) {
+      return currentDocument.getText() === targetText ? "whole-document-fallback" : "conflict-cancelled";
+    }
+
+    return (await this.replaceWholeDocument(currentDocument, targetText)) ? "whole-document-fallback" : "failed";
+  }
+
+  private canSafelyReapplyRanges(
+    document: vscode.TextDocument,
+    previousSnapshot: DocumentSnapshot,
+    event: CapturedChangeEvent
+  ): boolean {
+    if (event.changes.length === 0 || document.getText() !== previousSnapshot.text) {
+      return false;
+    }
+
+    const sortedChanges = [...event.changes].sort(
+      (left, right) => document.offsetAt(right.range.start) - document.offsetAt(left.range.start)
+    );
+    let rebuiltText = previousSnapshot.text;
+    let lastAppliedStart = Number.MAX_SAFE_INTEGER;
+
+    for (const change of sortedChanges) {
+      const start = document.offsetAt(change.range.start);
+      const end = document.offsetAt(change.range.end);
+      if (start > end || end > previousSnapshot.text.length || end > lastAppliedStart) {
+        return false;
+      }
+
+      rebuiltText = `${rebuiltText.slice(0, start)}${change.text}${rebuiltText.slice(end)}`;
+      lastAppliedStart = start;
+    }
+
+    return rebuiltText === event.newText;
+  }
+
+  private consumeForcedRangeReapplyFailure(): boolean {
+    if (!this.forceNextRangeReapplyFailure) {
+      return false;
+    }
+
+    this.forceNextRangeReapplyFailure = false;
+    this.log("Forcing whole-document reapply fallback for the next suspicious edit (test mode).");
+    return true;
+  }
+
+  private async showConflictWarning(relativePath: string, diffSession: DiffSessionHandle): Promise<void> {
+    const message = `Safe Exec kept the rollback for ${relativePath} because the document changed while approval was pending. Review the diff and reapply manually if you still want it.`;
+    const selection = await vscode.window.showWarningMessage(
+      message,
+      {
+        modal: true,
+        detail: [
+          "This is a post-change rollback-and-reapply flow.",
+          "Safe Exec will not overwrite a document that changed after the rollback snapshot was restored."
+        ].join("\n")
+      },
+      "Review Diff",
+      "OK"
+    );
+
+    if (selection === "Review Diff") {
+      await this.options.diffContentProvider.openDiff(diffSession);
+    }
   }
 
   private calculateChangedCharacters(changes: readonly CapturedContentChange[]): number {

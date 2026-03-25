@@ -133,6 +133,7 @@ Notes:
 - `protectedPathPatterns` increases sensitivity on high-value files
 - `ignoredPathPatterns` suppresses review for noisy generated paths
 - `maxPreviewCharacters` is now a legacy compatibility field; Safe Exec uses a real diff review flow for suspicious edits
+- suspicious edit approval is still post-change and uses a rollback-and-reapply flow with `Review Diff`, `Reapply Edit`, and `Deny`
 
 ## Policy bundles
 

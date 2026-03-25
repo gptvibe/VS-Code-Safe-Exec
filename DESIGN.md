@@ -27,7 +27,7 @@ The design goal is to use stable VS Code APIs, keep behavior explainable, and av
 - `src/rules.ts`
   Defines built-in defaults, policy bundles, settings, rules-file loading, and merge behavior.
 - `src/keybindingInspector.ts`
-  Inspects user keybindings for common raw guarded-command bindings without equivalent Safe Exec proxies.
+  Inspects user keybindings for common raw guarded-command bindings without equivalent Safe Exec proxies and flags missing proxy coverage that still makes raw entry points likely.
 - `src/onboarding.ts`
   Builds the onboarding content shown by the first-run flow and the walkthrough command.
 - `src/auditLog.ts`
@@ -51,8 +51,8 @@ Flow:
 
 1. VS Code reports a shell execution start event.
 2. Safe Exec normalizes the command line and compares it against `allowedCommands`, `dangerousCommands`, and `confirmationCommands`.
-3. If the command matches a risky rule, Safe Exec records an `intercepted` audit event.
-4. Safe Exec attempts to interrupt and dispose the original terminal.
+3. If the command matches a risky rule, Safe Exec records a `matched` audit event.
+4. Safe Exec attempts to interrupt and dispose the original terminal, logging `interrupted-attempted` and `dispose-attempted`.
 5. The approval dialog includes:
    - matched rule details
    - command trust and confidence
@@ -83,10 +83,10 @@ Flow:
    - protected-path patterns
 3. If the edit looks suspicious, Safe Exec records `intercepted` and restores the previous snapshot.
 4. A virtual before/after diff session is created with `src/diffContentProvider.ts`.
-5. The approval dialog offers `Open Diff`.
-6. On approval, Safe Exec reapplies only the captured edit ranges when possible.
-7. If range-based reapply fails, Safe Exec falls back to whole-document replacement.
-8. If the document changes while approval is pending, Safe Exec keeps the rollback, records `conflict`, and warns instead of overwriting newer content.
+5. The approval dialog offers `Review Diff`, `Reapply Edit`, and `Deny`.
+6. On approval, Safe Exec reapplies only the captured edit ranges when possible and records `range-based`.
+7. If range-based reapply is not possible, Safe Exec falls back to whole-document replacement and records `whole-document-fallback`.
+8. If the document changes while approval is pending, Safe Exec keeps the rollback, records `conflict-cancelled`, and warns instead of overwriting newer content.
 
 This keeps the flow readable and conservative without claiming stronger guarantees than the API allows.
 
@@ -117,9 +117,11 @@ Why this design:
 Safe Exec now includes:
 
 - first-run onboarding
+- a main command opened by the status bar item
 - a walkthrough contribution
 - recommended proxy keybinding snippets
 - warnings when common raw guarded keybindings are found without matching Safe Exec proxy bindings
+- advisories when common guarded commands still have no Safe Exec proxy keybinding
 - a status bar indicator that surfaces disabled, untrusted, and partial-coverage states
 
 The onboarding and keybinding flows are intentionally manual. Safe Exec can recommend bindings, but it does not silently rewrite user keybindings.
@@ -171,15 +173,19 @@ Safe Exec writes:
 
 Tracked actions include:
 
-- `intercepted`
-- `interrupted`
+- `matched`
+- `interrupted-attempted`
+- `dispose-attempted`
 - `approved`
+- `reviewed`
+- `range-based`
+- `whole-document-fallback`
 - `replayed`
 - `replay-degraded`
+- `replay-failed`
 - `denied`
-- `failed-to-stop`
 - `failed`
-- `conflict`
+- `conflict-cancelled`
 - `status`
 
 The audit trail is useful for operator visibility, but it is not tamper-proof.

@@ -3,15 +3,23 @@ import { RiskLevel } from "./rules";
 
 export type AuditSurface = "terminal" | "edit" | "command" | "workspace" | "onboarding";
 export type AuditAction =
+  | "matched"
   | "intercepted"
   | "interrupted"
+  | "interrupted-attempted"
+  | "dispose-attempted"
   | "approved"
+  | "reviewed"
+  | "range-based"
+  | "whole-document-fallback"
   | "replayed"
   | "replay-degraded"
+  | "replay-failed"
   | "denied"
   | "failed-to-stop"
   | "failed"
   | "conflict"
+  | "conflict-cancelled"
   | "status";
 
 export interface AuditEvent {

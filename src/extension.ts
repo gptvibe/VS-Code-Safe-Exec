@@ -6,7 +6,7 @@ import { DiffContentProvider } from "./diffContentProvider";
 import { EditInterceptor } from "./editInterceptor";
 import { inspectUserKeybindings, renderRecommendedKeybindingsJson } from "./keybindingInspector";
 import { createOnboardingMarkdown } from "./onboarding";
-import { ApprovalDecision, PermissionUI, ScriptedApprovalResponder } from "./permissionUI";
+import { ApprovalDecision, DeferredApprovalHandle, PermissionUI, ScriptedApprovalResponder } from "./permissionUI";
 import {
   DEFAULT_RULES,
   POLICY_BUNDLES,
@@ -21,6 +21,8 @@ import { TerminalInterceptor } from "./terminalInterceptor";
 
 export interface SafeExecExtensionApi {
   queueApproval: (decision: ApprovalDecision) => void;
+  createDeferredApproval: () => DeferredApprovalHandle;
+  forceNextEditRangeReapplyFailure: () => void;
   getAuditEvents: (limit?: number) => AuditEvent[];
   resetTestState: () => Promise<void>;
   simulateTerminalCommand: (execution: Parameters<TerminalInterceptor["simulateExecutionForTesting"]>[0]) => Promise<void>;
@@ -35,11 +37,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   let effectiveRules: SafeExecRules = DEFAULT_RULES;
   let rulesWatcher: vscode.Disposable | undefined;
   let latestKeybindingWarnings: string[] = [];
+  let latestKeybindingAdvisories: string[] = [];
   let keybindingStatusLine = "Keybinding coverage not checked yet.";
   let lastWarnedKeybindingHash = context.workspaceState.get<string>("safeExec.keybindingWarningHash.v1");
 
   const statusBar = vscode.window.createStatusBarItem("safeExec.status", vscode.StatusBarAlignment.Left, 1000);
-  statusBar.command = "safeExec.openOnboarding";
+  statusBar.command = "safeExec.openMainMenu";
   statusBar.show();
 
   const isEnabled = (): boolean => getSettings().enabled;
@@ -59,6 +62,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
 
     if (latestKeybindingWarnings.length > 0) {
       statusBar.text = "$(warning) Safe Exec";
+    } else if (latestKeybindingAdvisories.length > 0) {
+      statusBar.text = "$(shield) Safe Exec";
     } else if (!vscode.workspace.isTrusted) {
       statusBar.text = "$(shield) Safe Exec Untrusted";
     } else {
@@ -86,10 +91,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   const refreshKeybindingDiagnostics = async (showWarning = false): Promise<void> => {
     const inspection = await inspectUserKeybindings();
     latestKeybindingWarnings = inspection.warnings;
+    latestKeybindingAdvisories = inspection.advisories;
     keybindingStatusLine = inspection.error
       ? `Keybinding inspection: ${inspection.error}`
       : inspection.warnings.length > 0
-      ? `${inspection.warnings.length} raw guarded keybinding(s) are missing a Safe Exec proxy equivalent.`
+      ? `${inspection.warnings.length} raw guarded keybinding(s) bypass a matching Safe Exec proxy binding.`
+      : inspection.advisories.length > 0
+      ? `${inspection.advisories.length} guarded command(s) still have no Safe Exec proxy keybinding, so raw entry points are still likely to be used.`
       : "No explicit raw guarded keybinding mismatches were found in user keybindings.json.";
     updateStatusBar();
 
@@ -132,10 +140,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   const openOnboarding = async (): Promise<void> => {
     const inspection = await inspectUserKeybindings();
     latestKeybindingWarnings = inspection.warnings;
+    latestKeybindingAdvisories = inspection.advisories;
     keybindingStatusLine = inspection.error
       ? `Keybinding inspection: ${inspection.error}`
       : inspection.warnings.length > 0
-      ? `${inspection.warnings.length} raw guarded keybinding(s) are missing a Safe Exec proxy equivalent.`
+      ? `${inspection.warnings.length} raw guarded keybinding(s) bypass a matching Safe Exec proxy binding.`
+      : inspection.advisories.length > 0
+      ? `${inspection.advisories.length} guarded command(s) still have no Safe Exec proxy keybinding, so raw entry points are still likely to be used.`
       : "No explicit raw guarded keybinding mismatches were found in user keybindings.json.";
     updateStatusBar();
 
@@ -161,6 +172,73 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     void vscode.window.showInformationMessage(
       "Safe Exec opened your keybindings.json alongside a recommended proxy snippet. Merge the entries you want manually; Safe Exec does not edit keybindings automatically."
     );
+  };
+
+  const openMainMenu = async (): Promise<void> => {
+    const selection = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Open Onboarding",
+          description: "What Safe Exec protects, what it does not, and why proxies are explicit",
+          action: "onboarding" as const
+        },
+        {
+          label: "Review Proxy Keybindings",
+          description: "Open your keybindings.json beside the recommended proxy snippet",
+          action: "keybindings" as const
+        },
+        {
+          label: "Open Rules File",
+          description: "Review or customize workspace rules",
+          action: "rules" as const
+        },
+        {
+          label: "Show Recent Activity",
+          description: "Inspect approvals, denials, and replay outcomes",
+          action: "audit" as const
+        },
+        {
+          label: isEnabled() ? "Disable Protection" : "Enable Protection",
+          description: "Toggle Safe Exec protection for this workspace",
+          action: "toggle" as const
+        },
+        {
+          label: "Reload Rules",
+          description: "Reload Safe Exec rules from settings and workspace files",
+          action: "reload" as const
+        }
+      ],
+      {
+        title: "Safe Exec",
+        placeHolder: "Choose a Safe Exec action",
+        ignoreFocusOut: true
+      }
+    );
+
+    if (!selection) {
+      return;
+    }
+
+    switch (selection.action) {
+      case "onboarding":
+        await openOnboarding();
+        return;
+      case "keybindings":
+        await openRecommendedKeybindings();
+        return;
+      case "rules":
+        await vscode.commands.executeCommand("safeExec.openRulesFile");
+        return;
+      case "audit":
+        await vscode.commands.executeCommand("safeExec.showAuditHistory");
+        return;
+      case "toggle":
+        await vscode.commands.executeCommand("safeExec.toggleProtection");
+        return;
+      case "reload":
+        await vscode.commands.executeCommand("safeExec.reloadRules");
+        return;
+    }
   };
 
   const refreshRulesWatcher = (): void => {
@@ -217,6 +295,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     commandInterceptor.register(),
     terminalInterceptor.register(),
     editInterceptor.register(),
+    vscode.commands.registerCommand("safeExec.openMainMenu", async () => {
+      await openMainMenu();
+    }),
     vscode.commands.registerCommand("safeExec.toggleProtection", async () => {
       const settings = getSettings();
       const nextValue = !settings.enabled;
@@ -300,7 +381,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     })
   );
 
-  await maybeShowFirstRunOnboarding(context, openOnboarding);
+  await maybeShowFirstRunOnboarding(context);
   if (!vscode.workspace.isTrusted) {
     auditLog.record({
       action: "status",
@@ -319,6 +400,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     queueApproval: (decision: ApprovalDecision) => {
       scriptedResponder?.enqueue(decision);
     },
+    createDeferredApproval: () => scriptedResponder?.enqueueDeferred() ?? createUnavailableDeferredApprovalHandle(),
+    forceNextEditRangeReapplyFailure: () => {
+      editInterceptor.forceNextRangeReapplyFailureForTesting();
+    },
     getAuditEvents: (limit = 50) => auditLog.getRecentEvents(limit),
     resetTestState: async () => {
       scriptedResponder?.reset();
@@ -334,10 +419,7 @@ export function deactivate(): void {
   // VS Code disposes registered subscriptions automatically.
 }
 
-async function maybeShowFirstRunOnboarding(
-  context: vscode.ExtensionContext,
-  openOnboarding: () => Promise<void>
-): Promise<void> {
+async function maybeShowFirstRunOnboarding(context: vscode.ExtensionContext): Promise<void> {
   if (context.extensionMode === vscode.ExtensionMode.Test) {
     return;
   }
@@ -350,12 +432,12 @@ async function maybeShowFirstRunOnboarding(
   await context.globalState.update(key, true);
   const selection = await vscode.window.showInformationMessage(
     "Safe Exec is active. It is a best-effort approval layer, not a sandbox.",
-    "Open Onboarding",
+    "Open Safe Exec",
     "Later"
   );
 
-  if (selection === "Open Onboarding") {
-    await openOnboarding();
+  if (selection === "Open Safe Exec") {
+    await vscode.commands.executeCommand("safeExec.openMainMenu");
   }
 }
 
@@ -363,4 +445,21 @@ function workspaceTrustLine(): string {
   return vscode.workspace.isTrusted
     ? "Workspace Trust: trusted. This helps VS Code decide what workspace features to enable, but it is not a sandbox."
     : "Workspace Trust: untrusted. This can reduce some automatic workspace behavior, but it is not a sandbox.";
+}
+
+function createUnavailableDeferredApprovalHandle(): DeferredApprovalHandle {
+  return {
+    resolve: () => {
+      throw new Error("Deferred approvals are only available in Safe Exec test mode.");
+    },
+    allow: () => {
+      throw new Error("Deferred approvals are only available in Safe Exec test mode.");
+    },
+    deny: () => {
+      throw new Error("Deferred approvals are only available in Safe Exec test mode.");
+    },
+    review: () => {
+      throw new Error("Deferred approvals are only available in Safe Exec test mode.");
+    }
+  };
 }

@@ -14,6 +14,7 @@ export interface KeybindingInspection {
   sourcePath?: string;
   entries: KeybindingEntry[];
   warnings: string[];
+  advisories: string[];
   error?: string;
 }
 
@@ -66,20 +67,23 @@ export const RECOMMENDED_PROXY_KEYBINDINGS: RecommendedKeybinding[] = [
 export async function inspectUserKeybindings(): Promise<KeybindingInspection> {
   const sourcePath = resolveKeybindingsPath(vscode.env.appName);
   if (!sourcePath) {
-    return {
-      entries: [],
-      warnings: [],
-      error: "Safe Exec could not determine a keybindings.json path for this VS Code build."
-    };
+      return {
+        entries: [],
+        warnings: [],
+        advisories: [],
+        error: "Safe Exec could not determine a keybindings.json path for this VS Code build."
+      };
   }
 
   try {
     const raw = await fs.readFile(sourcePath, "utf8");
     const entries = parseKeybindingsFile(raw);
+    const findings = collectFindings(entries);
     return {
       sourcePath,
       entries,
-      warnings: collectWarnings(entries)
+      warnings: findings.warnings,
+      advisories: findings.advisories
     };
   } catch (error) {
     const nodeError = error as NodeJS.ErrnoException;
@@ -88,6 +92,10 @@ export async function inspectUserKeybindings(): Promise<KeybindingInspection> {
         sourcePath,
         entries: [],
         warnings: [],
+        advisories: GUARDED_BINDINGS.map(
+          (binding) =>
+            `${binding.label} has no Safe Exec proxy keybinding yet, so common raw entry points may still be easier to reach than the proxy command.`
+        ),
         error: "No user keybindings.json file was found yet."
       };
     }
@@ -96,6 +104,7 @@ export async function inspectUserKeybindings(): Promise<KeybindingInspection> {
       sourcePath,
       entries: [],
       warnings: [],
+      advisories: [],
       error: `Safe Exec could not inspect ${sourcePath}: ${nodeError.message}`
     };
   }
@@ -123,11 +132,18 @@ export function renderKeybindingSummary(inspection: KeybindingInspection): strin
 
   if (inspection.error) {
     lines.push(`- Inspection status: ${inspection.error}`);
-  } else if (inspection.warnings.length === 0) {
+  } else if (inspection.warnings.length === 0 && inspection.advisories.length === 0) {
     lines.push("- Inspection status: no explicit raw keybinding mismatches were found in user keybindings.json.");
   } else {
-    lines.push("- Warnings:");
-    lines.push(...inspection.warnings.map((warning) => `  - ${warning}`));
+    if (inspection.warnings.length > 0) {
+      lines.push("- Warnings:");
+      lines.push(...inspection.warnings.map((warning) => `  - ${warning}`));
+    }
+
+    if (inspection.advisories.length > 0) {
+      lines.push("- Advisories:");
+      lines.push(...inspection.advisories.map((advisory) => `  - ${advisory}`));
+    }
   }
 
   lines.push("");
@@ -139,29 +155,40 @@ export function renderKeybindingSummary(inspection: KeybindingInspection): strin
   return lines.join("\n");
 }
 
-function collectWarnings(entries: readonly KeybindingEntry[]): string[] {
+function collectFindings(entries: readonly KeybindingEntry[]): { warnings: string[]; advisories: string[] } {
   const warnings: string[] = [];
+  const advisories: string[] = [];
 
   for (const guardedBinding of GUARDED_BINDINGS) {
     const rawEntries = entries.filter((entry) => entry.command === guardedBinding.rawCommand);
-    if (rawEntries.length === 0) {
-      continue;
+    const proxyEntries = entries.filter((entry) => entry.command === guardedBinding.proxyCommand);
+
+    if (rawEntries.length > 0) {
+      for (const rawEntry of rawEntries) {
+        const matchingProxy = proxyEntries.find((entry) => {
+          return (entry.key ?? "") === (rawEntry.key ?? "") && (entry.when ?? "") === (rawEntry.when ?? "");
+        });
+
+        if (!matchingProxy) {
+          const keyLabel = rawEntry.key ? ` on "${rawEntry.key}"` : "";
+          warnings.push(
+            `${guardedBinding.label}${keyLabel} is bound to "${guardedBinding.rawCommand}" without an equivalent Safe Exec proxy binding.`
+          );
+        }
+      }
     }
 
-    const proxyEntries = entries.filter((entry) => entry.command === guardedBinding.proxyCommand);
-    for (const rawEntry of rawEntries) {
-      const matchingProxy = proxyEntries.find((entry) => {
-        return (entry.key ?? "") === (rawEntry.key ?? "") && (entry.when ?? "") === (rawEntry.when ?? "");
-      });
-
-      if (!matchingProxy) {
-        const keyLabel = rawEntry.key ? ` on "${rawEntry.key}"` : "";
-        warnings.push(`${guardedBinding.label}${keyLabel} is bound to "${guardedBinding.rawCommand}" without an equivalent Safe Exec proxy binding.`);
-      }
+    if (proxyEntries.length === 0) {
+      advisories.push(
+        `${guardedBinding.label} has no Safe Exec proxy keybinding yet, so common raw entry points may still be easier to reach than the proxy command.`
+      );
     }
   }
 
-  return warnings;
+  return {
+    warnings,
+    advisories
+  };
 }
 
 function parseKeybindingsFile(raw: string): KeybindingEntry[] {

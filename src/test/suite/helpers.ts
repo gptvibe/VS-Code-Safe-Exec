@@ -107,6 +107,27 @@ export async function waitForAuditEvent(
   return matchedEvent;
 }
 
+export async function waitForSafeExecDiffTab(timeoutMs = 10000): Promise<vscode.Tab> {
+  let matchedTab: vscode.Tab | undefined;
+
+  await waitFor(() => {
+    matchedTab = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .find((tab) => {
+        return (
+          tab.input instanceof vscode.TabInputTextDiff &&
+          tab.input.original.scheme === "safe-exec-review" &&
+          tab.input.modified.scheme === "safe-exec-review"
+        );
+      });
+
+    return Boolean(matchedTab);
+  }, timeoutMs);
+
+  assert.ok(matchedTab, "Expected a Safe Exec diff tab to be open.");
+  return matchedTab;
+}
+
 export async function closeSafeExecTerminals(): Promise<void> {
   for (const terminal of vscode.window.terminals) {
     if (terminal.name.includes("Safe Exec")) {

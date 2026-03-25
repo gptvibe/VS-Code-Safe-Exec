@@ -49,21 +49,21 @@
     <text x="676" y="500" fill="#5f6f76" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="14">Safe Exec reapplies captured ranges first. Whole-document replace is fallback only.</text>
 
     <rect x="350" y="192" width="580" height="208" rx="24" fill="#fff7ea" stroke="#dfc8a5" stroke-width="2"/>
-    <text x="382" y="232" fill="#6d4c16" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">Reapply suspicious edit?</text>
+    <text x="382" y="232" fill="#6d4c16" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="28" font-weight="700">Reapply suspicious edit after rollback?</text>
     <text x="382" y="268" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">Reasons: changed 212 characters; used 4 separate edit ranges; matched a protected path rule</text>
-    <text x="382" y="298" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">This is a post-change rollback flow. Review the diff before reapplying.</text>
+    <text x="382" y="298" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">This is a post-change rollback-and-reapply flow. Review the diff before reapplying.</text>
     <text x="382" y="328" fill="#7c6340" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="16">If the document changes while approval is pending, Safe Exec keeps the rollback.</text>
     <rect x="382" y="348" width="126" height="34" rx="17" fill="#e9d5aa"/>
-    <text x="417" y="371" fill="#604312" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Open Diff</text>
+    <text x="405" y="371" fill="#604312" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Review Diff</text>
     <rect x="522" y="348" width="146" height="34" rx="17" fill="#295c48"/>
     <text x="552" y="371" fill="#eff8f2" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Reapply Edit</text>
     <rect x="682" y="348" width="138" height="34" rx="17" fill="#6a4b54"/>
-    <text x="714" y="371" fill="#fff1f4" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Keep Rollback</text>
+    <text x="730" y="371" fill="#fff1f4" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="15" font-weight="700">Deny</text>
 
     <rect x="70" y="642" width="1096" height="76" rx="20" fill="#eef3f6"/>
     <text x="96" y="676" fill="#21343d" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="23" font-weight="700">Recent activity</text>
     <text x="300" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">approved - edit - package.json</text>
-    <text x="596" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">conflict - edit - rollback kept</text>
+    <text x="560" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">conflict-cancelled - edit - rollback kept</text>
     <text x="884" y="676" fill="#5f737b" font-family="JetBrains Mono, Consolas, monospace" font-size="15">replay-degraded - terminal</text>
     <text x="96" y="703" fill="#677981" font-family="IBM Plex Sans, Segoe UI, Arial, sans-serif" font-size="14">Local per-workspace history for approvals, denials, conflicts, degraded replays, and failures. Useful for review, not tamper-proof.</text>
   </g>
