@@ -1,0 +1,126 @@
+{
+  "name": "vscode-safe-exec",
+  "displayName": "VS Code Safe Exec",
+  "description": "Best-effort guardrails for risky terminal commands, protected VS Code commands, and suspicious large edits.",
+  "version": "0.1.0",
+  "main": "./out/extension.js",
+  "engines": {
+    "vscode": "^1.99.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:safeExec.toggleProtection",
+    "onCommand:safeExec.openRulesFile",
+    "onCommand:safeExec.showEffectiveRules",
+    "onCommand:safeExec.runProtectedCommand",
+    "onCommand:safeExec.proxy.workbench.action.terminal.runSelectedText",
+    "onCommand:safeExec.proxy.workbench.action.tasks.runTask",
+    "onCommand:safeExec.proxy.github.copilot.generate"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "safeExec.toggleProtection",
+        "title": "Safe Exec: Toggle Protection",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.openRulesFile",
+        "title": "Safe Exec: Open Rules File",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.showEffectiveRules",
+        "title": "Safe Exec: Show Effective Rules",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.runProtectedCommand",
+        "title": "Safe Exec: Run Protected Command",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.workbench.action.terminal.runSelectedText",
+        "title": "Safe Exec: Proxy Run Selected Text In Terminal",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.workbench.action.tasks.runTask",
+        "title": "Safe Exec: Proxy Run Task",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.github.copilot.generate",
+        "title": "Safe Exec: Proxy GitHub Copilot Generate",
+        "category": "Safe Exec"
+      }
+    ],
+    "configuration": {
+      "title": "Safe Exec",
+      "properties": {
+        "safeExec.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Safe Exec protections."
+        },
+        "safeExec.rulesPath": {
+          "type": "string",
+          "default": ".vscode/safe-exec.rules.json",
+          "description": "Workspace-relative or absolute path to the JSON rules file."
+        },
+        "safeExec.protectedCommands": {
+          "type": "array",
+          "default": [
+            "workbench.action.terminal.runSelectedText",
+            "workbench.action.tasks.runTask",
+            "github.copilot.generate"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional command IDs that should require approval when executed through Safe Exec proxy commands."
+        },
+        "safeExec.terminal.killStrategy": {
+          "type": "string",
+          "enum": [
+            "dispose",
+            "interruptThenDispose"
+          ],
+          "default": "interruptThenDispose",
+          "description": "How Safe Exec attempts to stop a risky terminal command after shell integration reports it."
+        },
+        "safeExec.editHeuristics.minChangedCharacters": {
+          "type": "number",
+          "default": 200,
+          "minimum": 1,
+          "description": "Minimum changed characters before Safe Exec asks for approval on edits."
+        },
+        "safeExec.editHeuristics.minAffectedLines": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "description": "Minimum affected lines before Safe Exec asks for approval on edits."
+        },
+        "safeExec.editHeuristics.maxPreviewCharacters": {
+          "type": "number",
+          "default": 1600,
+          "minimum": 200,
+          "description": "Maximum preview size shown in edit approval dialogs."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.2",
+    "@types/vscode": "^1.99.0",
+    "typescript": "^5.8.3"
+  }
+}
