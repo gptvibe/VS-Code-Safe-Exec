@@ -4,6 +4,8 @@ import { AuditEvent, AuditLog } from "./auditLog";
 import { CommandInterceptor } from "./commandInterceptor";
 import { DiffContentProvider } from "./diffContentProvider";
 import { EditInterceptor } from "./editInterceptor";
+import { FileOperationInterceptor } from "./fileOperationInterceptor";
+import { FileOperationRecoveryStore } from "./fileOperationRecoveryStore";
 import { inspectUserKeybindings, renderRecommendedKeybindingsJson } from "./keybindingInspector";
 import { createOnboardingMarkdown } from "./onboarding";
 import { ApprovalDecision, DeferredApprovalHandle, PermissionUI, ScriptedApprovalResponder } from "./permissionUI";
@@ -40,6 +42,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   let latestKeybindingAdvisories: string[] = [];
   let keybindingStatusLine = "Keybinding coverage not checked yet.";
   let lastWarnedKeybindingHash = context.workspaceState.get<string>("safeExec.keybindingWarningHash.v1");
+  const fileOperationRecoveryStore = new FileOperationRecoveryStore(resolveFileOperationStorageUri(context), output);
 
   const statusBar = vscode.window.createStatusBarItem("safeExec.status", vscode.StatusBarAlignment.Left, 1000);
   statusBar.command = "safeExec.openMainMenu";
@@ -55,6 +58,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
       statusBar.tooltip = [
         "Safe Exec protection is disabled.",
         workspaceTrustLine(),
+        "File operations: best-effort preflight and bounded recovery remain unavailable while protection is off.",
         keybindingStatusLine
       ].join("\n");
       return;
@@ -73,6 +77,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     statusBar.tooltip = [
       "Safe Exec is a best-effort approval layer, not a sandbox.",
       workspaceTrustLine(),
+      "File operations: best-effort preflight and bounded recovery for supported VS Code file gestures.",
       keybindingStatusLine
     ].join("\n");
   };
@@ -198,6 +203,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
           action: "audit" as const
         },
         {
+          label: "Show Recent File Operations",
+          description: "Inspect best-effort file-op preflights, snapshots, and restore history",
+          action: "fileOps" as const
+        },
+        {
+          label: "Restore Last Recoverable File Operation",
+          description: "Restore the most recent supported delete or rename snapshot",
+          action: "restoreLastFileOp" as const
+        },
+        {
+          label: "Browse Recoverable File Operations",
+          description: "Choose a recoverable delete or rename operation to restore",
+          action: "browseFileOps" as const
+        },
+        {
           label: isEnabled() ? "Disable Protection" : "Enable Protection",
           description: "Toggle Safe Exec protection for this workspace",
           action: "toggle" as const
@@ -232,6 +252,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
       case "audit":
         await vscode.commands.executeCommand("safeExec.showAuditHistory");
         return;
+      case "fileOps":
+        await vscode.commands.executeCommand("safeExec.showRecentFileOperations");
+        return;
+      case "restoreLastFileOp":
+        await vscode.commands.executeCommand("safeExec.restoreLastRecoverableFileOperation");
+        return;
+      case "browseFileOps":
+        await vscode.commands.executeCommand("safeExec.browseRecoverableFileOperations");
+        return;
       case "toggle":
         await vscode.commands.executeCommand("safeExec.toggleProtection");
         return;
@@ -258,6 +287,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   };
 
   await reloadRules("activation");
+  await fileOperationRecoveryStore.initialize();
   refreshRulesWatcher();
   await refreshKeybindingDiagnostics(context.extensionMode !== vscode.ExtensionMode.Test);
   updateStatusBar();
@@ -285,6 +315,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     getRules,
     isEnabled
   });
+  const fileOperationInterceptor = new FileOperationInterceptor({
+    output,
+    auditLog,
+    recoveryStore: fileOperationRecoveryStore,
+    getRules,
+    isEnabled,
+    showUserNotices: context.extensionMode !== vscode.ExtensionMode.Test
+  });
 
   context.subscriptions.push(
     output,
@@ -295,6 +333,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     commandInterceptor.register(),
     terminalInterceptor.register(),
     editInterceptor.register(),
+    fileOperationInterceptor.register(),
     vscode.commands.registerCommand("safeExec.openMainMenu", async () => {
       await openMainMenu();
     }),
@@ -352,6 +391,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     vscode.commands.registerCommand("safeExec.showAuditHistory", async () => {
       await openMarkdownDocument(auditLog.renderMarkdown());
     }),
+    vscode.commands.registerCommand("safeExec.showRecentFileOperations", async () => {
+      await openMarkdownDocument(await fileOperationInterceptor.renderRecentOperationsMarkdown());
+    }),
+    vscode.commands.registerCommand("safeExec.restoreLastRecoverableFileOperation", async () => {
+      await fileOperationInterceptor.restoreLastRecoverableOperation();
+    }),
+    vscode.commands.registerCommand("safeExec.browseRecoverableFileOperations", async () => {
+      await fileOperationInterceptor.browseRecoverableOperations();
+    }),
     vscode.commands.registerCommand("safeExec.reloadRules", async () => {
       await reloadRules("manual command");
       void vscode.window.showInformationMessage("Safe Exec rules reloaded.");
@@ -408,6 +456,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     resetTestState: async () => {
       scriptedResponder?.reset();
       await auditLog.clear();
+      await fileOperationInterceptor.clearForTesting();
     },
     simulateTerminalCommand: async (execution) => {
       await terminalInterceptor.simulateExecutionForTesting(execution);
@@ -462,4 +511,17 @@ function createUnavailableDeferredApprovalHandle(): DeferredApprovalHandle {
       throw new Error("Deferred approvals are only available in Safe Exec test mode.");
     }
   };
+}
+
+function resolveFileOperationStorageUri(context: vscode.ExtensionContext): vscode.Uri {
+  if (context.storageUri) {
+    return vscode.Uri.joinPath(context.storageUri, "file-operations");
+  }
+
+  const workspaceToken =
+    vscode.workspace.workspaceFile?.path ??
+    vscode.workspace.workspaceFolders?.map((folder) => folder.uri.toString()).join("_") ??
+    "no-workspace";
+  const sanitizedToken = workspaceToken.replace(/[^a-z0-9._-]+/gi, "_");
+  return vscode.Uri.joinPath(context.globalStorageUri, sanitizedToken, "file-operations");
 }

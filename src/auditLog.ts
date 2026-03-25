@@ -1,10 +1,11 @@
 import * as vscode from "vscode";
 import { RiskLevel } from "./rules";
 
-export type AuditSurface = "terminal" | "edit" | "command" | "workspace" | "onboarding";
+export type AuditSurface = "terminal" | "edit" | "command" | "file" | "workspace" | "onboarding";
 export type AuditAction =
   | "matched"
   | "intercepted"
+  | "evaluated"
   | "interrupted"
   | "interrupted-attempted"
   | "dispose-attempted"
@@ -20,6 +21,15 @@ export type AuditAction =
   | "failed"
   | "conflict"
   | "conflict-cancelled"
+  | "snapshot-created"
+  | "create"
+  | "delete"
+  | "rename"
+  | "restore-started"
+  | "restored"
+  | "restore-failed"
+  | "unrecoverable"
+  | "metadata-only"
   | "status";
 
 export interface AuditEvent {

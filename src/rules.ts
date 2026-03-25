@@ -25,12 +25,25 @@ export interface EditHeuristics {
   ignoredPathPatterns: string[];
 }
 
+export interface FileOperationRules {
+  enabled: boolean;
+  maxSnapshotBytes: number;
+  maxFilesPerOperation: number;
+  minBulkOperationCount: number;
+  protectedPathPatterns: string[];
+  ignoredPathPatterns: string[];
+  sensitiveExtensions: string[];
+  sensitiveFileNames: string[];
+  captureBinarySnapshots: boolean;
+}
+
 export interface SafeExecRules {
   dangerousCommands: CommandPatternRule[];
   allowedCommands: CommandPatternRule[];
   confirmationCommands: CommandPatternRule[];
   protectedCommands: ProtectedCommandRule[];
   editHeuristics: EditHeuristics;
+  fileOps: FileOperationRules;
 }
 
 export interface PolicyBundleDefinition {
@@ -42,6 +55,7 @@ export interface PolicyBundleDefinition {
   confirmationCommands?: CommandPatternRule[];
   protectedCommands?: ProtectedCommandRule[];
   editHeuristics?: Partial<Pick<EditHeuristics, "protectedPathPatterns" | "ignoredPathPatterns">>;
+  fileOps?: Partial<Pick<FileOperationRules, "protectedPathPatterns" | "ignoredPathPatterns" | "sensitiveExtensions" | "sensitiveFileNames">>;
 }
 
 export interface SafeExecSettings {
@@ -51,6 +65,20 @@ export interface SafeExecSettings {
   protectedCommands: string[];
   terminalKillStrategy: "interruptThenDispose" | "dispose";
   editHeuristics: Partial<Pick<EditHeuristics, "minChangedCharacters" | "minAffectedLines" | "maxPreviewCharacters">>;
+  fileOps: Partial<
+    Pick<
+      FileOperationRules,
+      | "enabled"
+      | "maxSnapshotBytes"
+      | "maxFilesPerOperation"
+      | "minBulkOperationCount"
+      | "protectedPathPatterns"
+      | "ignoredPathPatterns"
+      | "sensitiveExtensions"
+      | "sensitiveFileNames"
+      | "captureBinarySnapshots"
+    >
+  >;
 }
 
 type PartialRuleInput = Partial<{
@@ -60,7 +88,79 @@ type PartialRuleInput = Partial<{
   confirmationCommands: Array<string | Partial<CommandPatternRule>>;
   protectedCommands: Array<string | Partial<ProtectedCommandRule>>;
   editHeuristics: Partial<EditHeuristics>;
+  fileOps: Partial<FileOperationRules>;
 }>;
+
+const COMMON_PROTECTED_PATH_PATTERNS = [
+  "(^|[\\\\/])\\.github[\\\\/]",
+  "(^|[\\\\/])\\.github[\\\\/]workflows[\\\\/]",
+  "(^|[\\\\/])\\.gitlab-ci\\.ya?ml$",
+  "(^|[\\\\/])\\.circleci[\\\\/]",
+  "(^|[\\\\/])\\.vscode[\\\\/]",
+  "(^|[\\\\/])\\.env(?:\\.[^\\\\/]+)?$",
+  "(^|[\\\\/])\\.npmrc$",
+  "(^|[\\\\/])\\.pypirc$",
+  "(^|[\\\\/])package\\.json$",
+  "(^|[\\\\/])tsconfig\\.json$",
+  "(^|[\\\\/])yarn\\.lock$",
+  "(^|[\\\\/])bun\\.lockb$",
+  "(^|[\\\\/])pnpm-lock\\.yaml$",
+  "(^|[\\\\/])pnpm-workspace\\.yaml$",
+  "(^|[\\\\/])package-lock\\.json$",
+  "(^|[\\\\/])pyproject\\.toml$",
+  "(^|[\\\\/])poetry\\.lock$",
+  "(^|[\\\\/])uv\\.lock$",
+  "(^|[\\\\/])Pipfile(?:\\.lock)?$",
+  "(^|[\\\\/])Dockerfile(?:\\.[^\\\\/]+)?$",
+  "(^|[\\\\/])(?:docker-)?compose(?:\\.[^\\\\/]+)?\\.ya?ml$",
+  "\\.tf$",
+  "\\.tfvars(?:\\.json)?$",
+  "(^|[\\\\/])\\.terraform\\.lock\\.hcl$",
+  "(^|[\\\\/])Chart\\.ya?ml$",
+  "(^|[\\\\/])kustomization\\.ya?ml$",
+  "(^|[\\\\/])Jenkinsfile$"
+];
+
+const COMMON_IGNORED_PATH_PATTERNS = [
+  "(^|[\\\\/])node_modules[\\\\/]",
+  "(^|[\\\\/])out[\\\\/]",
+  "(^|[\\\\/])dist[\\\\/]",
+  "\\.git[\\\\/]"
+];
+
+const FILE_OPERATION_SENSITIVE_EXTENSIONS = [
+  ".pem",
+  ".key",
+  ".crt",
+  ".cer",
+  ".p12",
+  ".pfx",
+  ".jks",
+  ".keystore",
+  ".tfstate",
+  ".tfvars",
+  ".kubeconfig"
+];
+
+const FILE_OPERATION_SENSITIVE_FILE_NAMES = [
+  ".env",
+  ".npmrc",
+  ".pypirc",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "pyproject.toml",
+  "poetry.lock",
+  "uv.lock",
+  "Pipfile",
+  "Pipfile.lock",
+  "Dockerfile",
+  "Chart.yaml",
+  "kustomization.yaml",
+  "Jenkinsfile"
+];
 
 export const DEFAULT_RULES: SafeExecRules = {
   dangerousCommands: [
@@ -133,41 +233,19 @@ export const DEFAULT_RULES: SafeExecRules = {
     minAffectedLines: 8,
     maxPreviewCharacters: 1500,
     multipleChangeCount: 3,
-    protectedPathPatterns: [
-      "(^|[\\\\/])\\.github[\\\\/]",
-      "(^|[\\\\/])\\.github[\\\\/]workflows[\\\\/]",
-      "(^|[\\\\/])\\.gitlab-ci\\.ya?ml$",
-      "(^|[\\\\/])\\.circleci[\\\\/]",
-      "(^|[\\\\/])\\.vscode[\\\\/]",
-      "(^|[\\\\/])\\.env(?:\\.[^\\\\/]+)?$",
-      "(^|[\\\\/])\\.npmrc$",
-      "(^|[\\\\/])\\.pypirc$",
-      "(^|[\\\\/])package\\.json$",
-      "(^|[\\\\/])tsconfig\\.json$",
-      "(^|[\\\\/])yarn\\.lock$",
-      "(^|[\\\\/])bun\\.lockb$",
-      "(^|[\\\\/])pnpm-lock\\.yaml$",
-      "(^|[\\\\/])pnpm-workspace\\.yaml$",
-      "(^|[\\\\/])package-lock\\.json$",
-      "(^|[\\\\/])pyproject\\.toml$",
-      "(^|[\\\\/])poetry\\.lock$",
-      "(^|[\\\\/])uv\\.lock$",
-      "(^|[\\\\/])Pipfile(?:\\.lock)?$",
-      "(^|[\\\\/])Dockerfile(?:\\.[^\\\\/]+)?$",
-      "(^|[\\\\/])(?:docker-)?compose(?:\\.[^\\\\/]+)?\\.ya?ml$",
-      "\\.tf$",
-      "\\.tfvars(?:\\.json)?$",
-      "(^|[\\\\/])\\.terraform\\.lock\\.hcl$",
-      "(^|[\\\\/])Chart\\.ya?ml$",
-      "(^|[\\\\/])kustomization\\.ya?ml$",
-      "(^|[\\\\/])Jenkinsfile$"
-    ],
-    ignoredPathPatterns: [
-      "(^|[\\\\/])node_modules[\\\\/]",
-      "(^|[\\\\/])out[\\\\/]",
-      "(^|[\\\\/])dist[\\\\/]",
-      "\\.git[\\\\/]"
-    ]
+    protectedPathPatterns: COMMON_PROTECTED_PATH_PATTERNS,
+    ignoredPathPatterns: COMMON_IGNORED_PATH_PATTERNS
+  },
+  fileOps: {
+    enabled: true,
+    maxSnapshotBytes: 262144,
+    maxFilesPerOperation: 25,
+    minBulkOperationCount: 10,
+    protectedPathPatterns: COMMON_PROTECTED_PATH_PATTERNS,
+    ignoredPathPatterns: COMMON_IGNORED_PATH_PATTERNS,
+    sensitiveExtensions: FILE_OPERATION_SENSITIVE_EXTENSIONS,
+    sensitiveFileNames: FILE_OPERATION_SENSITIVE_FILE_NAMES,
+    captureBinarySnapshots: true
   }
 };
 
@@ -328,6 +406,52 @@ function normalizeEditHeuristics(input: Partial<EditHeuristics> | undefined): Pa
   return result;
 }
 
+function normalizeFileOperationRules(input: Partial<FileOperationRules> | undefined): Partial<FileOperationRules> {
+  if (!input) {
+    return {};
+  }
+
+  const result: Partial<FileOperationRules> = {};
+
+  if (typeof input.enabled === "boolean") {
+    result.enabled = input.enabled;
+  }
+
+  if (typeof input.maxSnapshotBytes === "number" && input.maxSnapshotBytes > 0) {
+    result.maxSnapshotBytes = input.maxSnapshotBytes;
+  }
+
+  if (typeof input.maxFilesPerOperation === "number" && input.maxFilesPerOperation > 0) {
+    result.maxFilesPerOperation = input.maxFilesPerOperation;
+  }
+
+  if (typeof input.minBulkOperationCount === "number" && input.minBulkOperationCount > 0) {
+    result.minBulkOperationCount = input.minBulkOperationCount;
+  }
+
+  if (Array.isArray(input.protectedPathPatterns)) {
+    result.protectedPathPatterns = input.protectedPathPatterns.filter((value): value is string => typeof value === "string");
+  }
+
+  if (Array.isArray(input.ignoredPathPatterns)) {
+    result.ignoredPathPatterns = input.ignoredPathPatterns.filter((value): value is string => typeof value === "string");
+  }
+
+  if (Array.isArray(input.sensitiveExtensions)) {
+    result.sensitiveExtensions = input.sensitiveExtensions.filter((value): value is string => typeof value === "string");
+  }
+
+  if (Array.isArray(input.sensitiveFileNames)) {
+    result.sensitiveFileNames = input.sensitiveFileNames.filter((value): value is string => typeof value === "string");
+  }
+
+  if (typeof input.captureBinarySnapshots === "boolean") {
+    result.captureBinarySnapshots = input.captureBinarySnapshots;
+  }
+
+  return result;
+}
+
 function normalizeStringArray(values: readonly unknown[] | undefined): string[] {
   if (!Array.isArray(values)) {
     return [];
@@ -395,9 +519,19 @@ function getPolicyBundleDefinitions(bundleIds: readonly string[], output: vscode
 export function getSettings(): SafeExecSettings {
   const config = vscode.workspace.getConfiguration("safeExec");
   const editHeuristics: SafeExecSettings["editHeuristics"] = {};
+  const fileOps: SafeExecSettings["fileOps"] = {};
   const minChangedCharacters = getExplicitSafeExecSetting<number>(config, "editHeuristics.minChangedCharacters");
   const minAffectedLines = getExplicitSafeExecSetting<number>(config, "editHeuristics.minAffectedLines");
   const maxPreviewCharacters = getExplicitSafeExecSetting<number>(config, "editHeuristics.maxPreviewCharacters");
+  const fileOpsEnabled = getExplicitSafeExecSetting<boolean>(config, "fileOps.enabled");
+  const maxSnapshotBytes = getExplicitSafeExecSetting<number>(config, "fileOps.maxSnapshotBytes");
+  const maxFilesPerOperation = getExplicitSafeExecSetting<number>(config, "fileOps.maxFilesPerOperation");
+  const minBulkOperationCount = getExplicitSafeExecSetting<number>(config, "fileOps.minBulkOperationCount");
+  const protectedPathPatterns = getExplicitSafeExecSetting<string[]>(config, "fileOps.protectedPathPatterns");
+  const ignoredPathPatterns = getExplicitSafeExecSetting<string[]>(config, "fileOps.ignoredPathPatterns");
+  const sensitiveExtensions = getExplicitSafeExecSetting<string[]>(config, "fileOps.sensitiveExtensions");
+  const sensitiveFileNames = getExplicitSafeExecSetting<string[]>(config, "fileOps.sensitiveFileNames");
+  const captureBinarySnapshots = getExplicitSafeExecSetting<boolean>(config, "fileOps.captureBinarySnapshots");
 
   if (typeof minChangedCharacters === "number") {
     editHeuristics.minChangedCharacters = minChangedCharacters;
@@ -411,13 +545,50 @@ export function getSettings(): SafeExecSettings {
     editHeuristics.maxPreviewCharacters = maxPreviewCharacters;
   }
 
+  if (typeof fileOpsEnabled === "boolean") {
+    fileOps.enabled = fileOpsEnabled;
+  }
+
+  if (typeof maxSnapshotBytes === "number") {
+    fileOps.maxSnapshotBytes = maxSnapshotBytes;
+  }
+
+  if (typeof maxFilesPerOperation === "number") {
+    fileOps.maxFilesPerOperation = maxFilesPerOperation;
+  }
+
+  if (typeof minBulkOperationCount === "number") {
+    fileOps.minBulkOperationCount = minBulkOperationCount;
+  }
+
+  if (Array.isArray(protectedPathPatterns)) {
+    fileOps.protectedPathPatterns = normalizeStringArray(protectedPathPatterns);
+  }
+
+  if (Array.isArray(ignoredPathPatterns)) {
+    fileOps.ignoredPathPatterns = normalizeStringArray(ignoredPathPatterns);
+  }
+
+  if (Array.isArray(sensitiveExtensions)) {
+    fileOps.sensitiveExtensions = normalizeStringArray(sensitiveExtensions);
+  }
+
+  if (Array.isArray(sensitiveFileNames)) {
+    fileOps.sensitiveFileNames = normalizeStringArray(sensitiveFileNames);
+  }
+
+  if (typeof captureBinarySnapshots === "boolean") {
+    fileOps.captureBinarySnapshots = captureBinarySnapshots;
+  }
+
   return {
     enabled: config.get<boolean>("enabled", true),
     rulesPath: config.get<string>("rulesPath", ".vscode/safe-exec.rules.json"),
     policyBundles: config.get<string[]>("policyBundles", []),
     protectedCommands: config.get<string[]>("protectedCommands", []),
     terminalKillStrategy: config.get<"interruptThenDispose" | "dispose">("terminal.killStrategy", "interruptThenDispose"),
-    editHeuristics
+    editHeuristics,
+    fileOps
   };
 }
 
@@ -474,10 +645,27 @@ export async function loadEffectiveRules(output: vscode.OutputChannel): Promise<
   const bundledProtectedCommands = bundleDefinitions.flatMap((bundle) => bundle.protectedCommands ?? []);
   const bundledProtectedPathPatterns = bundleDefinitions.flatMap((bundle) => bundle.editHeuristics?.protectedPathPatterns ?? []);
   const bundledIgnoredPathPatterns = bundleDefinitions.flatMap((bundle) => bundle.editHeuristics?.ignoredPathPatterns ?? []);
+  const bundledFileProtectedPathPatterns = bundleDefinitions.flatMap(
+    (bundle) => bundle.fileOps?.protectedPathPatterns ?? bundle.editHeuristics?.protectedPathPatterns ?? []
+  );
+  const bundledFileIgnoredPathPatterns = bundleDefinitions.flatMap(
+    (bundle) => bundle.fileOps?.ignoredPathPatterns ?? bundle.editHeuristics?.ignoredPathPatterns ?? []
+  );
+  const bundledSensitiveExtensions = bundleDefinitions.flatMap((bundle) => bundle.fileOps?.sensitiveExtensions ?? []);
+  const bundledSensitiveFileNames = bundleDefinitions.flatMap((bundle) => bundle.fileOps?.sensitiveFileNames ?? []);
+  const normalizedFileEditHeuristics = normalizeEditHeuristics(fileRules.editHeuristics);
+  const normalizedSettingEditHeuristics = normalizeEditHeuristics(settings.editHeuristics);
+  const normalizedFileFileOps = normalizeFileOperationRules(fileRules.fileOps);
+  const normalizedSettingFileOps = normalizeFileOperationRules(settings.fileOps);
   const mergedEditHeuristics = {
     ...DEFAULT_RULES.editHeuristics,
-    ...normalizeEditHeuristics(fileRules.editHeuristics),
-    ...settings.editHeuristics
+    ...normalizedFileEditHeuristics,
+    ...normalizedSettingEditHeuristics
+  };
+  const mergedFileOps = {
+    ...DEFAULT_RULES.fileOps,
+    ...normalizedFileFileOps,
+    ...normalizedSettingFileOps
   };
 
   return {
@@ -509,13 +697,48 @@ export async function loadEffectiveRules(output: vscode.OutputChannel): Promise<
       protectedPathPatterns: mergePatternLists(
         DEFAULT_RULES.editHeuristics.protectedPathPatterns,
         bundledProtectedPathPatterns,
-        mergedEditHeuristics.protectedPathPatterns ?? []
+        normalizedFileEditHeuristics.protectedPathPatterns ?? [],
+        normalizedSettingEditHeuristics.protectedPathPatterns ?? []
       ),
       ignoredPathPatterns: mergePatternLists(
         DEFAULT_RULES.editHeuristics.ignoredPathPatterns,
         bundledIgnoredPathPatterns,
-        mergedEditHeuristics.ignoredPathPatterns ?? []
+        normalizedFileEditHeuristics.ignoredPathPatterns ?? [],
+        normalizedSettingEditHeuristics.ignoredPathPatterns ?? []
       )
+    },
+    fileOps: {
+      enabled: mergedFileOps.enabled ?? DEFAULT_RULES.fileOps.enabled,
+      maxSnapshotBytes: mergedFileOps.maxSnapshotBytes ?? DEFAULT_RULES.fileOps.maxSnapshotBytes,
+      maxFilesPerOperation: mergedFileOps.maxFilesPerOperation ?? DEFAULT_RULES.fileOps.maxFilesPerOperation,
+      minBulkOperationCount: mergedFileOps.minBulkOperationCount ?? DEFAULT_RULES.fileOps.minBulkOperationCount,
+      protectedPathPatterns: mergePatternLists(
+        DEFAULT_RULES.fileOps.protectedPathPatterns,
+        bundledFileProtectedPathPatterns,
+        normalizedFileEditHeuristics.protectedPathPatterns ?? [],
+        normalizedFileFileOps.protectedPathPatterns ?? [],
+        normalizedSettingFileOps.protectedPathPatterns ?? []
+      ),
+      ignoredPathPatterns: mergePatternLists(
+        DEFAULT_RULES.fileOps.ignoredPathPatterns,
+        bundledFileIgnoredPathPatterns,
+        normalizedFileEditHeuristics.ignoredPathPatterns ?? [],
+        normalizedFileFileOps.ignoredPathPatterns ?? [],
+        normalizedSettingFileOps.ignoredPathPatterns ?? []
+      ),
+      sensitiveExtensions: mergePatternLists(
+        DEFAULT_RULES.fileOps.sensitiveExtensions,
+        bundledSensitiveExtensions,
+        normalizedFileFileOps.sensitiveExtensions ?? [],
+        normalizedSettingFileOps.sensitiveExtensions ?? []
+      ),
+      sensitiveFileNames: mergePatternLists(
+        DEFAULT_RULES.fileOps.sensitiveFileNames,
+        bundledSensitiveFileNames,
+        normalizedFileFileOps.sensitiveFileNames ?? [],
+        normalizedSettingFileOps.sensitiveFileNames ?? []
+      ),
+      captureBinarySnapshots: mergedFileOps.captureBinarySnapshots ?? DEFAULT_RULES.fileOps.captureBinarySnapshots
     }
   };
 }

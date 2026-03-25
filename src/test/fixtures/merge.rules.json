@@ -19,5 +19,14 @@
     "protectedPathPatterns": [
       "CUSTOM_PROTECTED_PATH"
     ]
+  },
+  "fileOps": {
+    "maxFilesPerOperation": 7,
+    "protectedPathPatterns": [
+      "CUSTOM_FILE_OP_PROTECTED_PATH"
+    ],
+    "sensitiveExtensions": [
+      ".fixture-secret"
+    ]
   }
 }

@@ -2,15 +2,15 @@
 
 ## Security posture
 
-Safe Exec is a best-effort approval and review layer for risky activity inside VS Code. It is meant to reduce surprise and make harmful actions slower and more visible.
+Safe Exec is a best-effort approval, review, and recovery layer for risky activity inside VS Code. It is meant to reduce surprise and make harmful actions slower, more visible, and easier to inspect.
 
 Safe Exec is not:
 
 - a sandbox
 - a security boundary
-- a pre-execution enforcement layer
 - a guarantee that a risky action never begins
-- a guarantee that all VS Code commands or edits are intercepted
+- a guarantee that every VS Code command, edit, or file operation is intercepted
+- a claim that all file operations can be blocked or restored
 
 The extension is intentionally honest about these limits in code, docs, and UI.
 
@@ -35,6 +35,29 @@ Safe Exec watches text-document change events, which are post-change. It snapsho
 ### Protected commands
 
 Safe Exec protects command execution only through explicit Safe Exec proxy and wrapper commands. It does not claim transparent protection for arbitrary raw built-in commands.
+
+### File operations
+
+Safe Exec watches these VS Code workspace events:
+
+- `workspace.onWillCreateFiles`
+- `workspace.onWillDeleteFiles`
+- `workspace.onWillRenameFiles`
+- `workspace.onDidCreateFiles`
+- `workspace.onDidDeleteFiles`
+- `workspace.onDidRenameFiles`
+
+For supported event-backed paths:
+
+- create operations are observed and classified
+- delete and rename operations are evaluated before completion
+- bounded snapshots are captured for supported delete and rename targets when feasible
+- restore commands can recreate or rename back supported delete or rename targets from stored snapshots
+
+Important boundary:
+
+- this applies only where VS Code emits those file-operation events
+- Safe Exec does not claim that all filesystem mutations pass through them
 
 ## Honest boundaries
 
@@ -74,34 +97,66 @@ Common bypasses include:
 
 The onboarding flow and keybinding inspection are there to make this limitation visible, not to hide it.
 
+### File-operation preflight is event scoped
+
+File-operation handling is deliberately scoped to supported VS Code event paths.
+
+What Safe Exec can honestly say:
+
+- it can do a best-effort preflight for supported `onWill*Files` paths
+- it can capture bounded snapshots before supported delete or rename operations complete
+- it can restore supported delete or rename snapshots later
+
+What Safe Exec does not claim:
+
+- that every file operation in the workspace passes through these hooks
+- that a denied prompt creates a universal filesystem block
+- that external disk changes are covered
+- that `workspace.fs` mutation paths are covered
+
+### File-operation recovery is bounded
+
+File-operation recovery is intentionally limited:
+
+- snapshots are capped by `fileOps.maxSnapshotBytes`
+- snapshots are capped by `fileOps.maxFilesPerOperation`
+- binary capture can be disabled with `fileOps.captureBinarySnapshots`
+- oversized files fall back to metadata-only entries
+- unsupported URIs can be observed without snapshot content
+- create operations are recorded but not automatically reversed
+- restore may skip paths that already exist to avoid overwriting newer content
+
+This keeps the feature useful without turning it into a fake backup claim.
+
 ## Workspace Trust
 
 Safe Exec integrates with Workspace Trust, but Workspace Trust is not treated as a security boundary.
 
 In practice:
 
-- Safe Exec can still show approval prompts and inspect edits in untrusted workspaces where VS Code allows it
+- Safe Exec can still show approval prompts and inspect supported flows in untrusted workspaces where VS Code allows it
 - Safe Exec records trust state transitions in local audit history
 - Safe Exec status UI explains whether the current workspace is trusted or untrusted
 
 Workspace Trust can reduce some VS Code behavior. It does not isolate the shell, other extensions, or the host operating system.
 
-## Audit history and logging
+## Audit history and storage
 
-Safe Exec records local per-workspace history for events such as:
+Safe Exec records local history for events such as:
 
 - terminal outcomes like `matched`, `interrupted-attempted`, `dispose-attempted`, `approved`, `denied`, `replayed`, `replay-degraded`, and `replay-failed`
 - edit outcomes like `intercepted`, `reviewed`, `approved`, `range-based`, `whole-document-fallback`, `conflict-cancelled`, and `failed`
+- file-operation outcomes like `evaluated`, `intercepted`, `snapshot-created`, `metadata-only`, `unrecoverable`, `create`, `delete`, `rename`, `restore-started`, `restored`, and `restore-failed`
 - status events like `status`
 
 Important limits:
 
-- audit history is stored in local extension state
+- audit history is stored locally
 - it is not tamper-proof
 - it is not a system audit log
 - it should not be treated as a complete forensic record
 
-The output channel also emits structured JSON log lines for debugging and review.
+File-operation recovery payloads are kept in extension-managed storage instead of `workspaceState`, but that does not make them immutable or security-sensitive data stores.
 
 ## Known bypasses
 
@@ -111,8 +166,10 @@ Safe Exec does not reliably cover:
 - terminals without usable shell integration
 - extensions spawning child processes directly through Node APIs
 - raw built-in VS Code commands that are not routed through Safe Exec proxies
-- direct filesystem mutation that never appears as a normal text-document edit
-- non-text file changes
+- direct filesystem mutation that never appears as a normal text-document edit or supported file-operation event
+- external disk changes made by another application
+- `workspace.fs` create, delete, rename, or write paths that bypass the file-operation hooks
+- non-text file changes that are too large or unsupported for snapshot capture
 - malicious extensions that intentionally avoid Safe Exec flows
 
 ## Residual risk
@@ -127,4 +184,4 @@ Residual risk remains even when Safe Exec prompts correctly. Users should still 
 
 ## Security statement
 
-Safe Exec improves approval, visibility, and review around risky actions in VS Code. It does not create hard isolation and should never be described as sandboxing.
+Safe Exec improves approval, visibility, and bounded recovery around risky actions in VS Code. It does not create hard isolation and should never be described as sandboxing or guaranteed blocking.

@@ -19,5 +19,10 @@
     "protectedPathPatterns": [
       "(^|[\\\\/])test-protected\\.txt$"
     ]
+  },
+  "fileOps": {
+    "protectedPathPatterns": [
+      "(^|[\\\\/])test-protected\\.txt$"
+    ]
   }
 }

@@ -12,7 +12,12 @@ const DEFAULT_WORKSPACE_SETTINGS = {
   "safeExec.protectedCommands": [],
   "safeExec.editHeuristics.minChangedCharacters": 5,
   "safeExec.editHeuristics.minAffectedLines": 1,
-  "safeExec.editHeuristics.maxPreviewCharacters": 200
+  "safeExec.editHeuristics.maxPreviewCharacters": 200,
+  "safeExec.fileOps.enabled": true,
+  "safeExec.fileOps.maxSnapshotBytes": 262144,
+  "safeExec.fileOps.maxFilesPerOperation": 25,
+  "safeExec.fileOps.minBulkOperationCount": 10,
+  "safeExec.fileOps.captureBinarySnapshots": true
 } as const;
 
 type WorkspaceSettings = Record<string, unknown>;
@@ -57,6 +62,25 @@ export async function updateFixtureFile(relativePath: string, content: string): 
   const applied = await vscode.workspace.applyEdit(edit);
   assert.ok(applied, `Expected to update fixture file ${relativePath}.`);
   await existing.save();
+}
+
+export async function writeFixtureFile(relativePath: string, content: string | Uint8Array): Promise<void> {
+  const absolutePath = getFixturePath(relativePath);
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, content);
+}
+
+export async function readFixtureFile(relativePath: string): Promise<string> {
+  return fs.readFile(getFixturePath(relativePath), "utf8");
+}
+
+export async function fixtureExists(relativePath: string): Promise<boolean> {
+  try {
+    await fs.access(getFixturePath(relativePath));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function writeWorkspaceSettings(
@@ -143,6 +167,7 @@ export function delay(milliseconds: number): Promise<void> {
 }
 
 async function restoreFixtureFiles(): Promise<void> {
+  await cleanGeneratedFixtureFiles();
   await fs.writeFile(getFixturePath("sample.ts"), 'export const originalValue = "safe-exec";\n', "utf8");
   await fs.writeFile(getFixturePath("test-protected.txt"), "safe exec fixture\n", "utf8");
   await fs.writeFile(
@@ -167,6 +192,9 @@ async function restoreFixtureFiles(): Promise<void> {
           minChangedCharacters: 5,
           minAffectedLines: 1,
           protectedPathPatterns: ["(^|[\\\\/])test-protected\\.txt$"]
+        },
+        fileOps: {
+          protectedPathPatterns: ["(^|[\\\\/])test-protected\\.txt$"]
         }
       },
       null,
@@ -174,6 +202,20 @@ async function restoreFixtureFiles(): Promise<void> {
     ) + "\n",
     "utf8"
   );
+}
+
+async function cleanGeneratedFixtureFiles(): Promise<void> {
+  const workspaceRoot = getFixturePath();
+  const preservedNames = new Set([".vscode", "sample.ts", "test-protected.txt"]);
+  const entries = await fs.readdir(workspaceRoot, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (preservedNames.has(entry.name)) {
+      continue;
+    }
+
+    await fs.rm(path.join(workspaceRoot, entry.name), { recursive: true, force: true });
+  }
 }
 
 async function waitForSafeExecSettings(expected: WorkspaceSettings): Promise<void> {

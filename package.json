@@ -1,7 +1,7 @@
 {
   "name": "vscode-safe-exec",
   "displayName": "VS Code Safe Exec",
-  "description": "Best-effort guardrails for risky terminal commands, protected VS Code commands, and suspicious large edits.",
+  "description": "Best-effort guardrails for risky terminal commands, protected VS Code commands, suspicious large edits, and supported file operations.",
   "version": "0.1.0",
   "main": "./out/extension.js",
   "engines": {
@@ -26,6 +26,9 @@
     "onCommand:safeExec.openOnboarding",
     "onCommand:safeExec.installRecommendedKeybindings",
     "onCommand:safeExec.showAuditHistory",
+    "onCommand:safeExec.showRecentFileOperations",
+    "onCommand:safeExec.restoreLastRecoverableFileOperation",
+    "onCommand:safeExec.browseRecoverableFileOperations",
     "onCommand:safeExec.runProtectedCommand",
     "onCommand:safeExec.proxy.workbench.action.terminal.runSelectedText",
     "onCommand:safeExec.proxy.workbench.action.tasks.runTask",
@@ -71,6 +74,21 @@
       {
         "command": "safeExec.showAuditHistory",
         "title": "Safe Exec: Show Recent Activity",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.showRecentFileOperations",
+        "title": "Safe Exec: Show Recent File Operations",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.restoreLastRecoverableFileOperation",
+        "title": "Safe Exec: Restore Last Recoverable File Operation",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.browseRecoverableFileOperations",
+        "title": "Safe Exec: Browse Recoverable File Operations",
         "category": "Safe Exec"
       },
       {
@@ -139,13 +157,25 @@
           {
             "id": "safeExec.openAuditHistory",
             "title": "Open recent Safe Exec activity",
-            "description": "Review approvals, denials, degraded replays, and related best-effort status events for this workspace.",
+            "description": "Review approvals, denials, degraded replays, file-operation recovery events, and related best-effort status history for this workspace.",
             "media": {
               "image": "media/diff-review.svg",
               "altText": "Illustrative Safe Exec audit history"
             },
             "completionEvents": [
               "onCommand:safeExec.showAuditHistory"
+            ]
+          },
+          {
+            "id": "safeExec.reviewFileOperations",
+            "title": "Review recoverable file operations",
+            "description": "Open recent best-effort file-operation history and restore options for supported delete and rename flows.",
+            "media": {
+              "image": "media/diff-review.svg",
+              "altText": "Illustrative Safe Exec file operation recovery"
+            },
+            "completionEvents": [
+              "onCommand:safeExec.showRecentFileOperations"
             ]
           }
         ]
@@ -225,6 +255,66 @@
           "minimum": 200,
           "description": "Legacy fallback preview size for suspicious edit review.",
           "deprecationMessage": "Safe Exec now uses a full diff view for suspicious edit review. This setting is retained for compatibility and no longer affects the primary review flow."
+        },
+        "safeExec.fileOps.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable Safe Exec best-effort file-operation evaluation and recovery for supported VS Code create, delete, and rename flows."
+        },
+        "safeExec.fileOps.maxSnapshotBytes": {
+          "type": "number",
+          "default": 262144,
+          "minimum": 1024,
+          "description": "Maximum bytes Safe Exec will capture per file snapshot before delete or rename. Larger files fall back to metadata-only recovery."
+        },
+        "safeExec.fileOps.maxFilesPerOperation": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "description": "Maximum files Safe Exec will snapshot for a single delete or rename operation before falling back to partial or metadata-only recovery."
+        },
+        "safeExec.fileOps.minBulkOperationCount": {
+          "type": "number",
+          "default": 10,
+          "minimum": 2,
+          "description": "Minimum affected file count before Safe Exec classifies a file operation as bulk."
+        },
+        "safeExec.fileOps.protectedPathPatterns": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional regex path patterns that should raise file-operation risk and snapshot priority."
+        },
+        "safeExec.fileOps.ignoredPathPatterns": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional regex path patterns Safe Exec should treat as lower-signal when evaluating file operations."
+        },
+        "safeExec.fileOps.sensitiveExtensions": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional file extensions that should raise file-operation risk and recovery priority."
+        },
+        "safeExec.fileOps.sensitiveFileNames": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional file names that should raise file-operation risk and recovery priority."
+        },
+        "safeExec.fileOps.captureBinarySnapshots": {
+          "type": "boolean",
+          "default": true,
+          "description": "Allow Safe Exec to capture byte-for-byte snapshots for small binary files. When disabled, binary files fall back to metadata-only recovery."
         }
       }
     }

@@ -9,10 +9,8 @@ async function main(): Promise<void> {
   const extensionDevelopmentPath = launchRoot;
   const extensionTestsPath = path.resolve(launchRoot, "out/test/suite/index");
   const workspacePath = path.resolve(launchRoot, "src/test/fixtures/workspace");
-  const userDataDir = path.join(os.tmpdir(), "safe-exec-vscode-user-data");
-  const extensionsDir = path.join(os.tmpdir(), "safe-exec-vscode-extensions");
-  await fs.rm(userDataDir, { recursive: true, force: true });
-  await fs.rm(extensionsDir, { recursive: true, force: true });
+  const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "safe-exec-vscode-user-data-"));
+  const extensionsDir = await fs.mkdtemp(path.join(os.tmpdir(), "safe-exec-vscode-extensions-"));
 
   await runTests({
     extensionDevelopmentPath,
@@ -35,14 +33,26 @@ void main().catch((error) => {
 });
 
 async function createLaunchRoot(repoRoot: string): Promise<string> {
-  const launchRoot = path.join(os.tmpdir(), "safe-exec-vscode-test-root");
-  await fs.rm(launchRoot, { recursive: true, force: true });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const launchParent = await fs.mkdtemp(path.join(os.tmpdir(), "safe-exec-vscode-test-root-"));
+    const launchRoot = path.join(launchParent, "repo");
 
-  if (process.platform === "win32") {
-    await fs.symlink(repoRoot, launchRoot, "junction");
-    return launchRoot;
+    try {
+      await fs.rm(launchRoot, { recursive: true, force: true });
+      if (process.platform === "win32") {
+        await fs.symlink(repoRoot, launchRoot, "junction");
+      } else {
+        await fs.symlink(repoRoot, launchRoot);
+      }
+
+      return launchRoot;
+    } catch (error) {
+      const nodeError = error as NodeJS.ErrnoException;
+      if (nodeError.code !== "EEXIST") {
+        throw error;
+      }
+    }
   }
 
-  await fs.symlink(repoRoot, launchRoot);
-  return launchRoot;
+  throw new Error("Safe Exec could not create a temporary VS Code launch root after repeated attempts.");
 }

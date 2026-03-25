@@ -10,8 +10,9 @@ Safe Exec combines built-in defaults with workspace rules, selected settings, an
 - `confirmationCommands`
 - `protectedCommands`
 - `editHeuristics`
+- `fileOps`
 
-`policyBundles` is new and lets a workspace opt into additional stack-specific presets without copying large rule lists by hand.
+`policyBundles` lets a workspace opt into stack-specific presets without copying large rule lists by hand.
 
 ## Example rules file
 
@@ -37,11 +38,6 @@ Safe Exec combines built-in defaults with workspace rules, selected settings, an
       "command": "workbench.action.tasks.runTask",
       "description": "Always confirm before running tasks in this workspace",
       "risk": "high"
-    },
-    {
-      "command": "/^git\\./i",
-      "description": "Require approval for Git extension commands routed through Safe Exec",
-      "risk": "medium"
     }
   ],
   "editHeuristics": {
@@ -49,12 +45,20 @@ Safe Exec combines built-in defaults with workspace rules, selected settings, an
     "minAffectedLines": 6,
     "multipleChangeCount": 2,
     "protectedPathPatterns": [
-      "(^|[\\\\/])infra[\\\\/]",
-      "(^|[\\\\/])scripts[\\\\/]release\\.[^\\\\/]+$"
-    ],
-    "ignoredPathPatterns": [
-      "(^|[\\\\/])coverage[\\\\/]"
+      "(^|[\\\\/])infra[\\\\/]"
     ]
+  },
+  "fileOps": {
+    "maxSnapshotBytes": 131072,
+    "maxFilesPerOperation": 12,
+    "minBulkOperationCount": 6,
+    "protectedPathPatterns": [
+      "(^|[\\\\/])release[\\\\/]"
+    ],
+    "sensitiveExtensions": [
+      ".pem"
+    ],
+    "captureBinarySnapshots": false
   }
 }
 ```
@@ -94,14 +98,6 @@ Fields:
 }
 ```
 
-```json
-{
-  "command": "/^github\\./i",
-  "description": "GitHub extension commands routed through Safe Exec",
-  "risk": "medium"
-}
-```
-
 Important:
 
 - protected-command rules only apply when the command is invoked through a Safe Exec proxy or `safeExec.runProtectedCommand`
@@ -135,6 +131,63 @@ Notes:
 - `maxPreviewCharacters` is now a legacy compatibility field; Safe Exec uses a real diff review flow for suspicious edits
 - suspicious edit approval is still post-change and uses a rollback-and-reapply flow with `Review Diff`, `Reapply Edit`, and `Deny`
 
+### File-operation rules
+
+`fileOps` controls best-effort file-operation evaluation and bounded recovery:
+
+```json
+{
+  "enabled": true,
+  "maxSnapshotBytes": 262144,
+  "maxFilesPerOperation": 25,
+  "minBulkOperationCount": 10,
+  "protectedPathPatterns": [
+    "(^|[\\\\/])\\.github[\\\\/]"
+  ],
+  "ignoredPathPatterns": [
+    "(^|[\\\\/])dist[\\\\/]"
+  ],
+  "sensitiveExtensions": [
+    ".pem",
+    ".tfstate"
+  ],
+  "sensitiveFileNames": [
+    "package.json",
+    "Dockerfile"
+  ],
+  "captureBinarySnapshots": true
+}
+```
+
+Fields:
+
+- `enabled`
+  Turn best-effort file-operation evaluation and recovery on or off.
+- `maxSnapshotBytes`
+  Per-file byte cap for delete and rename snapshots. Larger files fall back to metadata-only entries.
+- `maxFilesPerOperation`
+  Maximum number of files Safe Exec will snapshot for a single delete or rename operation.
+- `minBulkOperationCount`
+  Minimum affected-file count before Safe Exec classifies the operation as bulk.
+- `protectedPathPatterns`
+  Regex path patterns that raise file-operation risk and snapshot priority.
+- `ignoredPathPatterns`
+  Regex path patterns that lower the signal from matching file-operation paths unless those paths are also protected or sensitive. Safe Exec still records the observed operation when VS Code emits the event.
+- `sensitiveExtensions`
+  Extensions that raise file-operation risk and recovery priority.
+- `sensitiveFileNames`
+  File names that raise file-operation risk and recovery priority.
+- `captureBinarySnapshots`
+  When `true`, small binary files are stored byte-for-byte. When `false`, binary files fall back to metadata-only entries.
+
+Operational notes:
+
+- Safe Exec evaluates file operations only when VS Code emits supported create, delete, or rename events.
+- External disk changes are not covered.
+- `workspace.fs` mutations may bypass these hooks.
+- Delete and rename flows use best-effort preflight plus bounded recovery snapshots, but this is still not a security boundary.
+- Create flows are observed and classified, but Safe Exec does not automatically reverse them.
+
 ## Policy bundles
 
 Built-in bundle IDs:
@@ -152,6 +205,8 @@ Built-in bundle IDs:
 
 Bundle coverage is intentionally incomplete. Bundles are starter presets, not a claim of full stack security.
 
+For file operations, bundles reuse the same stack-specific protected-path additions already used by edit heuristics. This keeps edit protection and file-operation protection aligned on the same high-value paths.
+
 ## Built-in protected-path defaults
 
 The built-in defaults already include many high-value paths such as:
@@ -167,7 +222,7 @@ The built-in defaults already include many high-value paths such as:
 - `Chart.yaml`, `values*.yaml`, `kustomization.yaml`
 - `Jenkinsfile`
 
-You can add or narrow patterns in the rules file. Safe Exec merges your additional patterns with the defaults.
+File operations also ship with conservative built-in sensitive names and extensions for certificate material, keystores, Terraform state, and related high-value files.
 
 ## Merge behavior
 
@@ -176,8 +231,8 @@ Safe Exec loads rules in this model:
 1. built-in defaults
 2. policy bundles selected in the rules file
 3. policy bundles selected in settings
-4. rule arrays from the rules file
-5. selected settings overrides
+4. rule arrays and sections from the rules file
+5. explicit settings overrides
 
 Important merge details:
 
@@ -185,7 +240,15 @@ Important merge details:
 - `protectedCommands` are merged by command key, then extra command IDs from `safeExec.protectedCommands` are added
 - `policyBundles` from the rules file and settings are unioned
 - numeric edit thresholds are overridden in the order defaults -> rules file -> settings
-- `protectedPathPatterns` and `ignoredPathPatterns` are unioned
+- numeric and boolean file-op scalars are overridden in the order defaults -> rules file -> settings
+- `editHeuristics.protectedPathPatterns` and `editHeuristics.ignoredPathPatterns` are unioned
+- `fileOps.protectedPathPatterns` and `fileOps.ignoredPathPatterns` are unioned
+- file-op protected and ignored path lists also inherit the matching edit path lists so the same protected-path model applies across edits and file operations
+- `fileOps.sensitiveExtensions` and `fileOps.sensitiveFileNames` are unioned
+
+Current implementation note:
+
+- `fileOps.ignoredPathPatterns` is merged into effective rules and lowers low-signal matches during file-operation classification, but Safe Exec still records the operation if VS Code emitted the event
 
 This means settings and workspace rules add to coverage more often than they remove from it.
 
@@ -199,17 +262,17 @@ Relevant settings:
 - `safeExec.editHeuristics.minChangedCharacters`
 - `safeExec.editHeuristics.minAffectedLines`
 - `safeExec.editHeuristics.maxPreviewCharacters`
+- `safeExec.fileOps.enabled`
+- `safeExec.fileOps.maxSnapshotBytes`
+- `safeExec.fileOps.maxFilesPerOperation`
+- `safeExec.fileOps.minBulkOperationCount`
+- `safeExec.fileOps.protectedPathPatterns`
+- `safeExec.fileOps.ignoredPathPatterns`
+- `safeExec.fileOps.sensitiveExtensions`
+- `safeExec.fileOps.sensitiveFileNames`
+- `safeExec.fileOps.captureBinarySnapshots`
 
-Example settings snippet:
-
-```json
-{
-  "safeExec.policyBundles": ["python", "docker"],
-  "safeExec.protectedCommands": [
-    "workbench.action.tasks.runTask"
-  ]
-}
-```
+Settings only override the built-in defaults when you set them explicitly.
 
 ## Validation notes
 
@@ -217,10 +280,12 @@ Example settings snippet:
 - empty or malformed entries are skipped
 - command matching is case-sensitive for exact command IDs and regex-controlled when `/regex/flags` syntax is used
 - terminal regex rules are matched case-insensitively
+- file-operation path matching uses case-insensitive regex evaluation
 
 ## Practical guidance
 
 - use `allowedCommands` sparingly because it short-circuits prompting
 - put stack-wide defaults in `policyBundles`, then add workspace-specific patterns in the rules file
-- use protected-path patterns for files where rollback review is more useful than raw character thresholds
-- do not assume regex coverage is complete for aliases, wrapper scripts, or custom internal tooling
+- use protected-path patterns for files where rollback review and file-operation recovery are more useful than raw size thresholds
+- keep `maxSnapshotBytes` and `maxFilesPerOperation` conservative if you want faster preflight on large folders
+- do not assume file-operation coverage is complete for external tools, direct disk writes, or `workspace.fs` mutation paths
