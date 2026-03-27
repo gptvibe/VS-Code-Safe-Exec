@@ -1,12 +1,14 @@
 import * as assert from "assert/strict";
 import * as vscode from "vscode";
 import {
+  DEFAULT_RULES,
   POLICY_BUNDLES,
   compileRules,
   findFirstMatchingCommandRule,
   findMatchingProtectedCommandRule,
   loadEffectiveRules,
-  matchesAnyCompiledRegexPattern
+  matchesAnyCompiledRegexPattern,
+  matchesSensitivePath
 } from "../../rules";
 import type { EditHeuristics, FileOperationRules } from "../../rules";
 import type { SafeExecRules } from "../../rules";
@@ -207,6 +209,80 @@ suite("rule loading", () => {
     } finally {
       output.dispose();
     }
+  });
+
+  test("default protected path coverage matches common risky paths across Windows, Linux, and macOS styles", () => {
+    const compiled = compileRules(DEFAULT_RULES);
+    const protectedPaths = [
+      "C:\\Users\\safe-exec\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1",
+      "/home/safe-exec/.config/systemd/user/safe-exec.service",
+      "/Users/safe-exec/Library/LaunchAgents/com.safe-exec.agent.plist",
+      "C:\\Users\\safe-exec\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\safe-exec.bat",
+      "C:\\Windows\\System32\\Tasks\\SafeExec\\Nightly",
+      "/home/safe-exec/.ssh/config",
+      "/home/safe-exec/.aws/credentials",
+      "/home/safe-exec/.azure/accessTokens.json",
+      "/home/safe-exec/.kube/config",
+      "/Users/safe-exec/.docker/config.json",
+      "C:\\Users\\safe-exec\\AppData\\Roaming\\GitHub CLI\\hosts.yml",
+      "/Users/safe-exec/Library/Application Support/Code/User/profiles/work/settings.json",
+      "C:\\Users\\safe-exec\\AppData\\Roaming\\Cursor\\User\\tasks.json",
+      "/repo/.github/copilot-instructions.md",
+      "/repo/AGENTS.md",
+      "/repo/PROMPT.md",
+      "/home/safe-exec/.codex/automations/review.toml",
+      "/repo/.cursor/mcp.json"
+    ];
+
+    for (const protectedPath of protectedPaths) {
+      assert.equal(
+        matchesAnyCompiledRegexPattern(compiled.editHeuristics.protectedPathMatchers, protectedPath),
+        true,
+        `Expected edit heuristics to protect ${protectedPath}`
+      );
+      assert.equal(
+        matchesAnyCompiledRegexPattern(compiled.fileOps.protectedPathMatchers, protectedPath),
+        true,
+        `Expected file operations to protect ${protectedPath}`
+      );
+    }
+  });
+
+  test("default sensitive path coverage handles cross-platform separators and casing", () => {
+    const sensitivePaths = [
+      "C:\\Users\\safe-exec\\.ssh\\ID_ED25519",
+      "/home/safe-exec/.aws/credentials",
+      "/Users/safe-exec/.netrc",
+      "C:\\Users\\safe-exec\\AppData\\Roaming\\GitHub CLI\\HOSTS.YML",
+      "/home/safe-exec/vault/admin.KDBX",
+      "/repo/.codex/mcp.json",
+      "C:\\Users\\safe-exec\\.gnupg\\backup.AGE"
+    ];
+
+    for (const sensitivePath of sensitivePaths) {
+      assert.equal(
+        matchesSensitivePath(sensitivePath, DEFAULT_RULES.fileOps.sensitiveExtensions, DEFAULT_RULES.fileOps.sensitiveFileNames),
+        true,
+        `Expected sensitive path coverage for ${sensitivePath}`
+      );
+    }
+
+    assert.equal(
+      matchesSensitivePath(
+        "/repo/docs/config-guide.md",
+        DEFAULT_RULES.fileOps.sensitiveExtensions,
+        DEFAULT_RULES.fileOps.sensitiveFileNames
+      ),
+      false
+    );
+    assert.equal(
+      matchesSensitivePath(
+        "C:\\repo\\src\\task.json",
+        DEFAULT_RULES.fileOps.sensitiveExtensions,
+        DEFAULT_RULES.fileOps.sensitiveFileNames
+      ),
+      false
+    );
   });
 
   test("package.json policy bundle enums stay aligned with built-in bundle metadata", async () => {

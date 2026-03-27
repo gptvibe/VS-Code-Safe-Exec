@@ -1,5 +1,37 @@
 import type { SafeExecRules } from "./types";
 
+const SHELL_STARTUP_PROTECTED_PATH_PATTERNS = [
+  "(^|[\\\\/])\\.(?:bashrc|bash_profile|bash_login|profile|zshrc|zprofile|zlogin|zlogout|kshrc|mkshrc|cshrc|tcshrc|inputrc)$",
+  "(^|[\\\\/])\\.config[\\\\/]fish[\\\\/]config\\.fish$",
+  "(^|[\\\\/])(?:PowerShell|WindowsPowerShell)[\\\\/](?:[^\\\\/]+_profile|profile)\\.ps1$"
+];
+
+const PERSISTENCE_PROTECTED_PATH_PATTERNS = [
+  "(^|[\\\\/])(?:\\.config[\\\\/]systemd[\\\\/]user|etc[\\\\/]systemd[\\\\/](?:system|user)|usr(?:[\\\\/]local)?[\\\\/]lib[\\\\/]systemd[\\\\/](?:system|user)|lib[\\\\/]systemd[\\\\/](?:system|user))[\\\\/].+\\.(?:mount|path|service|socket|target|timer)$",
+  "(^|[\\\\/])etc[\\\\/]init\\.d[\\\\/].+",
+  "(^|[\\\\/])etc[\\\\/]rc\\.local$",
+  "(^|[\\\\/])(?:etc[\\\\/]crontab$|etc[\\\\/]cron\\.(?:d|daily|hourly|monthly|weekly)[\\\\/].+|var[\\\\/]spool[\\\\/]cron(?:[\\\\/]crontabs)?[\\\\/].+)$",
+  "(^|[\\\\/])Library[\\\\/](?:LaunchAgents|LaunchDaemons)[\\\\/].+\\.plist$",
+  "(^|[\\\\/])(?:ProgramData[\\\\/])?Microsoft[\\\\/]Windows[\\\\/]Start Menu[\\\\/]Programs[\\\\/]Startup(?:[\\\\/]|$)",
+  "(^|[\\\\/])Windows[\\\\/]System32[\\\\/]Tasks(?:[\\\\/]|$)"
+];
+
+const CREDENTIAL_AND_AUTH_PROTECTED_PATH_PATTERNS = [
+  "(^|[\\\\/])\\.(?:ssh|gnupg|aws|azure|kube)(?:[\\\\/]|$)",
+  "(^|[\\\\/])\\.docker[\\\\/]config\\.json$",
+  "(^|[\\\\/])containers[\\\\/]auth\\.json$",
+  "(^|[\\\\/])(?:\\.config[\\\\/]gh|AppData[\\\\/]Roaming[\\\\/]GitHub CLI)[\\\\/](?:hosts|config|state)\\.ya?ml$"
+];
+
+const EDITOR_AND_AGENT_PROTECTED_PATH_PATTERNS = [
+  "(^|[\\\\/])(?:AppData[\\\\/]Roaming|Library[\\\\/]Application Support|\\.config)[\\\\/](?:Code(?: - Insiders)?|VSCodium|Cursor|Windsurf)[\\\\/]User(?:[\\\\/]profiles[\\\\/][^\\\\/]+)?[\\\\/](?:extensions|keybindings|launch|profileAssociations|profiles|settings|tasks)\\.json$",
+  "(^|[\\\\/])\\.github[\\\\/]copilot-instructions\\.md$",
+  "(^|[\\\\/])(?:AGENTS|CLAUDE|CODEX|GEMINI|PROMPTS?)\\.md$",
+  "(^|[\\\\/])(?:\\.codex|\\.cursor|\\.continue|\\.windsurf|\\.roo(?:-code)?|\\.cline|\\.aider|\\.mcp)(?:[\\\\/]|$)",
+  "(^|[\\\\/])(?:mcp|\\.mcp)(?:\\.[^\\\\/]+)?\\.(?:json|jsonc|toml|ya?ml)$",
+  "(^|[\\\\/])claude_desktop_config\\.json$"
+];
+
 const COMMON_PROTECTED_PATH_PATTERNS = [
   "(^|[\\\\/])\\.github[\\\\/]",
   "(^|[\\\\/])\\.github[\\\\/]workflows[\\\\/]",
@@ -27,7 +59,11 @@ const COMMON_PROTECTED_PATH_PATTERNS = [
   "(^|[\\\\/])\\.terraform\\.lock\\.hcl$",
   "(^|[\\\\/])Chart\\.ya?ml$",
   "(^|[\\\\/])kustomization\\.ya?ml$",
-  "(^|[\\\\/])Jenkinsfile$"
+  "(^|[\\\\/])Jenkinsfile$",
+  ...SHELL_STARTUP_PROTECTED_PATH_PATTERNS,
+  ...PERSISTENCE_PROTECTED_PATH_PATTERNS,
+  ...CREDENTIAL_AND_AUTH_PROTECTED_PATH_PATTERNS,
+  ...EDITOR_AND_AGENT_PROTECTED_PATH_PATTERNS
 ];
 
 const COMMON_IGNORED_PATH_PATTERNS = [
@@ -48,13 +84,22 @@ const FILE_OPERATION_SENSITIVE_EXTENSIONS = [
   ".keystore",
   ".tfstate",
   ".tfvars",
-  ".kubeconfig"
+  ".kubeconfig",
+  ".age",
+  ".asc",
+  ".gpg",
+  ".kdbx",
+  ".p8",
+  ".pgp"
 ];
 
 const FILE_OPERATION_SENSITIVE_FILE_NAMES = [
   ".env",
   ".npmrc",
   ".pypirc",
+  ".netrc",
+  ".git-credentials",
+  ".kubeconfig",
   "package.json",
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -68,7 +113,18 @@ const FILE_OPERATION_SENSITIVE_FILE_NAMES = [
   "Dockerfile",
   "Chart.yaml",
   "kustomization.yaml",
-  "Jenkinsfile"
+  "Jenkinsfile",
+  "authorized_keys",
+  "known_hosts",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  "credentials",
+  "hosts.yml",
+  "hosts.yaml",
+  "claude_desktop_config.json",
+  "mcp.json"
 ];
 
 export const DEFAULT_RULES: SafeExecRules = {

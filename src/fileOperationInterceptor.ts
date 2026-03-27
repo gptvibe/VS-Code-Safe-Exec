@@ -10,7 +10,7 @@ import type {
   FileOperationRecoveryStore,
   FileOperationSnapshotInput
 } from "./fileOperationRecoveryStore";
-import { matchesAnyCompiledRegexPattern } from "./rules";
+import { matchesAnyCompiledRegexPattern, matchesSensitivePath } from "./rules";
 import type { CompiledRules, RiskLevel } from "./rules";
 
 interface FileOperationInterceptorOptions {
@@ -816,9 +816,7 @@ export class FileOperationInterceptor {
     }
 
     const rules = this.options.getRules().fileOps;
-    const extension = path.extname(uri.fsPath).toLowerCase();
-    const fileName = path.basename(uri.fsPath);
-    return rules.sensitiveExtensions.some((value) => value.toLowerCase() === extension) || rules.sensitiveFileNames.includes(fileName);
+    return matchesSensitivePath(uri.fsPath, rules.sensitiveExtensions, rules.sensitiveFileNames);
   }
 
   private async maybeShowOperationNotice(operation: FileOperationRecord): Promise<void> {

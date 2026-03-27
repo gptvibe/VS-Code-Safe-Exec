@@ -7,6 +7,7 @@ export {
   matchesAnyCompiledRegexPattern,
   matchesAnyRegexPattern
 } from "./matching";
+export { matchesSensitivePath } from "./pathMatching";
 export {
   mergePatternLists,
   mergePatternRules,
