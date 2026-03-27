@@ -94,11 +94,19 @@ export class CommandInterceptor {
     }
 
     const matchedRule = this.findProtectedCommandRule(targetCommand);
-    const approved = await this.options.permissionUI.requestApproval({
+    const approval = await this.options.permissionUI.requestApproval({
       title: "Allow protected VS Code command?",
       source: proxy.proxyCommand,
       risk: matchedRule?.risk ?? proxy.defaultRisk,
       summary: `Run "${targetCommand}" through Safe Exec?`,
+      explanation:
+        "This command only enters Safe Exec because it was launched through an explicit Safe Exec proxy or wrapper. Approval decides whether Safe Exec should forward the call to VS Code.",
+      whyFlagged: [
+        `Target command: ${targetCommand}`,
+        `Matched reason: ${matchedRule?.description ?? proxy.reason}`,
+        `Arguments captured: ${targetArgs.length}`,
+        "Built-in VS Code commands stay separate unless you explicitly route them through Safe Exec."
+      ],
       detail: [
         `Target command: ${targetCommand}`,
         `Reason: ${matchedRule?.description ?? proxy.reason}`,
@@ -113,18 +121,30 @@ export class CommandInterceptor {
         2
       ),
       previewLanguage: "json",
+      actionKey: buildProtectedCommandActionKey(targetCommand, targetArgs),
+      suppressRepeatedApprovedLowRisk: true,
+      workspaceTrustOption:
+        (matchedRule?.risk ?? proxy.defaultRisk) === "medium"
+          ? {
+              description:
+                "Allow In This Workspace creates a Safe Exec exception for this exact wrapped command in the current workspace only. It does not change VS Code Workspace Trust."
+            }
+          : undefined,
       allowLabel: "Run Command",
       denyLabel: "Deny"
     });
 
-    if (!approved) {
+    if (!approval.approved) {
       this.log(`Denied protected command "${targetCommand}".`);
       this.options.auditLog.record({
         action: "denied",
         surface: "command",
         source: proxy.proxyCommand,
         summary: `Denied "${targetCommand}"`,
-        risk: matchedRule?.risk ?? proxy.defaultRisk
+        risk: matchedRule?.risk ?? proxy.defaultRisk,
+        metadata: {
+          approvalResolution: approval.resolution
+        }
       });
       return undefined;
     }
@@ -134,7 +154,10 @@ export class CommandInterceptor {
       surface: "command",
       source: proxy.proxyCommand,
       summary: `Approved "${targetCommand}"`,
-      risk: matchedRule?.risk ?? proxy.defaultRisk
+      risk: matchedRule?.risk ?? proxy.defaultRisk,
+      metadata: {
+        approvalResolution: approval.resolution
+      }
     });
 
     return this.executeCommand(targetCommand, targetArgs);
@@ -201,4 +224,28 @@ export class CommandInterceptor {
   private log(message: string): void {
     this.options.output.appendLine(`[command] ${message}`);
   }
+}
+
+function buildProtectedCommandActionKey(targetCommand: string, targetArgs: readonly unknown[]): string {
+  return `command:${targetCommand}:${safeStableStringify(targetArgs)}`;
+}
+
+function safeStableStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, createStableJsonReplacer()) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function createStableJsonReplacer(): (key: string, value: unknown) => unknown {
+  return (_key, value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right))
+    );
+  };
 }

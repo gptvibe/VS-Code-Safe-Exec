@@ -7,8 +7,12 @@ import { DiffContentProvider } from "./diffContentProvider";
 import { EditInterceptor } from "./editInterceptor";
 import { FileOperationInterceptor } from "./fileOperationInterceptor";
 import { FileOperationRecoveryStore } from "./fileOperationRecoveryStore";
-import { inspectUserKeybindings, renderRecommendedKeybindingsJson } from "./keybindingInspector";
-import { createOnboardingMarkdown } from "./onboarding";
+import {
+  inspectUserKeybindings,
+  renderRecommendedKeybindingsJson,
+  summarizeKeybindingInspection
+} from "./keybindingInspector";
+import { createOnboardingDiagnostics, createOnboardingMarkdown } from "./onboarding";
 import { PermissionUI, ScriptedApprovalResponder } from "./permissionUI";
 import type { ApprovalDecision, DeferredApprovalHandle } from "./permissionUI";
 import {
@@ -35,7 +39,7 @@ export interface SafeExecExtensionApi {
 export async function activate(context: vscode.ExtensionContext): Promise<SafeExecExtensionApi> {
   const output = vscode.window.createOutputChannel("Safe Exec", { log: true });
   const scriptedResponder = context.extensionMode === vscode.ExtensionMode.Test ? new ScriptedApprovalResponder() : undefined;
-  const permissionUI = new PermissionUI(output, scriptedResponder);
+  const permissionUI = new PermissionUI(output, scriptedResponder, context.workspaceState);
   const auditLog = new AuditLog(output, context.workspaceState);
   const diffContentProvider = new DiffContentProvider();
   let effectiveRules: CompiledRules = DEFAULT_COMPILED_RULES;
@@ -44,6 +48,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   let latestKeybindingAdvisories: string[] = [];
   let keybindingStatusLine = "Keybinding coverage not checked yet.";
   let lastWarnedKeybindingHash = context.workspaceState.get<string>("safeExec.keybindingWarningHash.v1");
+  let shellIntegrationAvailable = vscode.window.terminals.some((terminal) => Boolean(terminal.shellIntegration));
+  let shellIntegrationCheckedWithProbe = false;
   const fileOperationRecoveryStore = new FileOperationRecoveryStore(resolveFileOperationStorageUri(context), output);
 
   const statusBar = vscode.window.createStatusBarItem("safeExec.status", vscode.StatusBarAlignment.Left, 1000);
@@ -96,18 +102,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     }
   };
 
-  const refreshKeybindingDiagnostics = async (showWarning = false): Promise<void> => {
-    const inspection = await inspectUserKeybindings();
+  const applyKeybindingInspection = (inspection: Awaited<ReturnType<typeof inspectUserKeybindings>>): void => {
     latestKeybindingWarnings = inspection.warnings;
     latestKeybindingAdvisories = inspection.advisories;
-    keybindingStatusLine = inspection.error
-      ? `Keybinding inspection: ${inspection.error}`
-      : inspection.warnings.length > 0
-      ? `${inspection.warnings.length} raw guarded keybinding(s) bypass a matching Safe Exec proxy binding.`
-      : inspection.advisories.length > 0
-      ? `${inspection.advisories.length} guarded command(s) still have no Safe Exec proxy keybinding, so raw entry points are still likely to be used.`
-      : "No explicit raw guarded keybinding mismatches were found in user keybindings.json.";
+    keybindingStatusLine = summarizeKeybindingInspection(inspection);
     updateStatusBar();
+  };
+
+  const refreshKeybindingDiagnostics = async (showWarning = false): Promise<void> => {
+    const inspection = await inspectUserKeybindings();
+    applyKeybindingInspection(inspection);
 
     if (showWarning && inspection.warnings.length > 0) {
       const warningHash = inspection.warnings.join("|");
@@ -133,6 +137,99 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     }
   };
 
+  const getConfiguredPolicyBundleState = (): { selected: string[]; unknown: string[] } => {
+    const configured = Array.from(new Set(getSettings().policyBundles));
+    return {
+      selected: configured.filter((bundleId) => Boolean(POLICY_BUNDLES[bundleId])),
+      unknown: configured.filter((bundleId) => !POLICY_BUNDLES[bundleId])
+    };
+  };
+
+  const waitForShellIntegration = async (terminal: vscode.Terminal, timeoutMs: number): Promise<boolean> => {
+    if (terminal.shellIntegration) {
+      return true;
+    }
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        disposable.dispose();
+        resolve(false);
+      }, timeoutMs);
+
+      const disposable = vscode.window.onDidChangeTerminalShellIntegration((event) => {
+        if (settled || event.terminal !== terminal) {
+          return;
+        }
+
+        settled = true;
+        clearTimeout(timer);
+        disposable.dispose();
+        resolve(true);
+      });
+    });
+  };
+
+  const probeShellIntegrationAvailability = async (): Promise<boolean> => {
+    if (shellIntegrationAvailable) {
+      shellIntegrationCheckedWithProbe = true;
+      return true;
+    }
+
+    let terminal: vscode.Terminal | undefined;
+    try {
+      terminal = vscode.window.createTerminal({
+        name: "Safe Exec Diagnostic",
+        hideFromUser: true,
+        isTransient: true
+      });
+      const available = await waitForShellIntegration(terminal, 1500);
+      shellIntegrationAvailable = available || shellIntegrationAvailable;
+      shellIntegrationCheckedWithProbe = true;
+      output.appendLine(
+        `[extension] Shell integration diagnostic ${available ? "detected availability" : "did not detect availability"} during probe.`
+      );
+      return available;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      shellIntegrationCheckedWithProbe = true;
+      output.appendLine(`[extension] Shell integration diagnostic probe failed: ${message}`);
+      return false;
+    } finally {
+      try {
+        terminal?.dispose();
+      } catch {
+        // Ignore best-effort probe cleanup failures.
+      }
+    }
+  };
+
+  const buildOnboardingContext = async (options: { runShellIntegrationProbe: boolean }) => {
+    const inspection = await inspectUserKeybindings();
+    applyKeybindingInspection(inspection);
+    const policyBundleState = getConfiguredPolicyBundleState();
+    const shellIntegrationIsAvailable = options.runShellIntegrationProbe
+      ? await probeShellIntegrationAvailability()
+      : shellIntegrationAvailable;
+
+    return {
+      inspection,
+      diagnostics: createOnboardingDiagnostics({
+        shellIntegrationAvailable: shellIntegrationIsAvailable,
+        shellIntegrationCheckedWithProbe,
+        isTrustedWorkspace: vscode.workspace.isTrusted,
+        keybindingInspection: inspection,
+        selectedPolicyBundleIds: policyBundleState.selected,
+        unknownPolicyBundleIds: policyBundleState.unknown
+      })
+    };
+  };
+
   const openMarkdownDocument = async (content: string): Promise<void> => {
     const document = await vscode.workspace.openTextDocument({
       language: "markdown",
@@ -144,23 +241,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     });
   };
 
-  const openOnboarding = async (): Promise<void> => {
-    const inspection = await inspectUserKeybindings();
-    latestKeybindingWarnings = inspection.warnings;
-    latestKeybindingAdvisories = inspection.advisories;
-    keybindingStatusLine = inspection.error
-      ? `Keybinding inspection: ${inspection.error}`
-      : inspection.warnings.length > 0
-      ? `${inspection.warnings.length} raw guarded keybinding(s) bypass a matching Safe Exec proxy binding.`
-      : inspection.advisories.length > 0
-      ? `${inspection.advisories.length} guarded command(s) still have no Safe Exec proxy keybinding, so raw entry points are still likely to be used.`
-      : "No explicit raw guarded keybinding mismatches were found in user keybindings.json.";
-    updateStatusBar();
-
+  const openOnboarding = async (options: { runShellIntegrationProbe?: boolean } = {}): Promise<void> => {
+    const onboardingContext = await buildOnboardingContext({
+      runShellIntegrationProbe: options.runShellIntegrationProbe ?? false
+    });
     const content = createOnboardingMarkdown({
       isEnabled: isEnabled(),
       isTrustedWorkspace: vscode.workspace.isTrusted,
-      keybindingInspection: inspection
+      keybindingInspection: onboardingContext.inspection,
+      diagnostics: onboardingContext.diagnostics,
+      workspaceApprovalExceptionCount: permissionUI.getWorkspaceApprovalExceptionCount()
     });
     await openMarkdownDocument(content);
   };
@@ -220,6 +310,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
           action: "browseFileOps" as const
         },
         {
+          label: "Clear Workspace Exceptions",
+          description: "Remove saved medium-risk allow-in-workspace exceptions for this workspace",
+          action: "clearWorkspaceExceptions" as const
+        },
+        {
           label: isEnabled() ? "Disable Protection" : "Enable Protection",
           description: "Toggle Safe Exec protection for this workspace",
           action: "toggle" as const
@@ -262,6 +357,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
         return;
       case "browseFileOps":
         await vscode.commands.executeCommand("safeExec.browseRecoverableFileOperations");
+        return;
+      case "clearWorkspaceExceptions":
+        await vscode.commands.executeCommand("safeExec.clearWorkspaceApprovalExceptions");
         return;
       case "toggle":
         await vscode.commands.executeCommand("safeExec.toggleProtection");
@@ -337,6 +435,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     terminalInterceptor.register(),
     editInterceptor.register(),
     fileOperationInterceptor.register(),
+    vscode.window.onDidChangeTerminalShellIntegration(() => {
+      shellIntegrationAvailable = true;
+      updateStatusBar();
+    }),
     vscode.commands.registerCommand("safeExec.openMainMenu", async () => {
       await openMainMenu();
     }),
@@ -388,6 +490,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     vscode.commands.registerCommand("safeExec.openOnboarding", async () => {
       await openOnboarding();
     }),
+    vscode.commands.registerCommand("safeExec.clearWorkspaceApprovalExceptions", async () => {
+      const cleared = await permissionUI.clearWorkspaceApprovalExceptions();
+      auditLog.record({
+        action: "status",
+        surface: "workspace",
+        source: "safeExec.clearWorkspaceApprovalExceptions",
+        summary: cleared > 0 ? `Cleared ${cleared} workspace approval exception(s)` : "No workspace approval exceptions to clear"
+      });
+      void vscode.window.showInformationMessage(
+        cleared > 0
+          ? `Safe Exec cleared ${cleared} saved workspace approval exception(s).`
+          : "Safe Exec had no saved workspace approval exceptions for this workspace."
+      );
+    }),
     vscode.commands.registerCommand("safeExec.installRecommendedKeybindings", async () => {
       await openRecommendedKeybindings();
     }),
@@ -432,7 +548,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     })
   );
 
-  await maybeShowFirstRunOnboarding(context);
+  await maybeShowFirstRunOnboarding(context, {
+    openOnboarding,
+    buildOnboardingContext,
+    auditLog
+  });
   if (!vscode.workspace.isTrusted) {
     auditLog.record({
       action: "status",
@@ -471,7 +591,16 @@ export function deactivate(): void {
   // VS Code disposes registered subscriptions automatically.
 }
 
-async function maybeShowFirstRunOnboarding(context: vscode.ExtensionContext): Promise<void> {
+async function maybeShowFirstRunOnboarding(
+  context: vscode.ExtensionContext,
+  options: {
+    openOnboarding: (options?: { runShellIntegrationProbe?: boolean }) => Promise<void>;
+    buildOnboardingContext: (options: { runShellIntegrationProbe: boolean }) => Promise<{
+      diagnostics: ReturnType<typeof createOnboardingDiagnostics>;
+    }>;
+    auditLog: AuditLog;
+  }
+): Promise<void> {
   if (context.extensionMode === vscode.ExtensionMode.Test) {
     return;
   }
@@ -482,14 +611,41 @@ async function maybeShowFirstRunOnboarding(context: vscode.ExtensionContext): Pr
   }
 
   await context.globalState.update(key, true);
-  const selection = await vscode.window.showInformationMessage(
-    "Safe Exec is active. It is a best-effort approval, rollback, and recovery layer, not a sandbox.",
-    "Open Safe Exec",
-    "Later"
-  );
+  const onboardingContext = await options.buildOnboardingContext({
+    runShellIntegrationProbe: true
+  });
+  const diagnosticEntries = [
+    onboardingContext.diagnostics.shellIntegration,
+    onboardingContext.diagnostics.workspaceTrust,
+    onboardingContext.diagnostics.proxyKeybindings,
+    onboardingContext.diagnostics.policyBundles
+  ];
+  const warningEntries = diagnosticEntries.filter((entry) => entry.status === "warning");
+  const message = warningEntries.length > 0
+    ? `Safe Exec first-run check found ${warningEntries.length} item(s) to review. ${warningEntries
+        .map((entry) => entry.summary)
+        .join(" ")}`
+    : "Safe Exec first-run check is ready. Shell integration, Workspace Trust, proxy keybindings, and policy bundles were inspected.";
 
-  if (selection === "Open Safe Exec") {
-    await vscode.commands.executeCommand("safeExec.openMainMenu");
+  options.auditLog.record({
+    action: "status",
+    surface: "onboarding",
+    source: "safeExec.firstRunDiagnostic",
+    summary: warningEntries.length > 0 ? "First-run diagnostic found items to review" : "First-run diagnostic completed",
+    detail: diagnosticEntries.map((entry) => entry.summary).join("\n"),
+    metadata: {
+      warningCount: warningEntries.length,
+      shellIntegrationAvailable: onboardingContext.diagnostics.shellIntegration.status === "ok"
+    }
+  });
+
+  const selection =
+    warningEntries.length > 0
+      ? await vscode.window.showWarningMessage(message, "Open Diagnostic", "Later")
+      : await vscode.window.showInformationMessage(message, "Open Diagnostic", "Later");
+
+  if (selection === "Open Diagnostic") {
+    await options.openOnboarding({ runShellIntegrationProbe: false });
   }
 }
 
@@ -507,10 +663,16 @@ function createUnavailableDeferredApprovalHandle(): DeferredApprovalHandle {
     allow: () => {
       throw new Error("Deferred approvals are only available in Safe Exec test mode.");
     },
+    allowInWorkspace: () => {
+      throw new Error("Deferred approvals are only available in Safe Exec test mode.");
+    },
     deny: () => {
       throw new Error("Deferred approvals are only available in Safe Exec test mode.");
     },
     review: () => {
+      throw new Error("Deferred approvals are only available in Safe Exec test mode.");
+    },
+    details: () => {
       throw new Error("Deferred approvals are only available in Safe Exec test mode.");
     }
   };

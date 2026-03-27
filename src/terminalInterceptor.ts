@@ -382,14 +382,32 @@ export class TerminalInterceptor {
     }
 
     const approvedOutcome = initialCriticalDecision?.kind === "manual" ? "manual-replay" : "automatic-replay";
-    const approved = await this.options.permissionUI.requestApproval({
+    const approval = await this.options.permissionUI.requestApproval({
       title: match.bucket === "dangerousCommands" ? "Allow risky terminal command?" : "Allow terminal command after confirmation?",
       source: `terminal:${context.terminal.name}`,
       risk,
       summary: match.normalizedCommand,
+      explanation:
+        "Safe Exec saw this command after VS Code shell integration reported a terminal execution start. Approval decides whether Safe Exec should replay the captured command in a fresh terminal after trying to stop the original one.",
+      whyFlagged: [
+        `Matched ${match.bucket}: ${match.rule.description ?? "custom terminal rule"}`,
+        `Rule pattern: ${match.rule.pattern}`,
+        `Command trust: ${context.commandLine.isTrusted ? "trusted" : "untrusted"}`,
+        `Command confidence: ${confidenceLabel(context.commandLine.confidence)}`,
+        `Captured cwd: ${replayContext.cwd?.toString() ?? "unknown"}`
+      ],
       detail: detailLines.join("\n"),
       preview: context.commandLine.value,
       previewLanguage: "shellscript",
+      actionKey: buildTerminalActionKey(match.normalizedCommand, replayContext.cwd),
+      suppressRepeatedApprovedLowRisk: true,
+      workspaceTrustOption:
+        risk === "medium" && stopResult.stopped && degradedContext.length === 0
+          ? {
+              description:
+                "Allow In This Workspace creates a Safe Exec exception for this exact medium-risk command and captured working directory in the current workspace only. It does not change VS Code Workspace Trust."
+            }
+          : undefined,
       allowLabel:
         initialCriticalDecision?.kind === "manual"
           ? "Copy For Manual Replay"
@@ -399,7 +417,7 @@ export class TerminalInterceptor {
       denyLabel: "Deny"
     });
 
-    if (!approved) {
+    if (!approval.approved) {
       this.options.auditLog.record({
         action: "denied",
         surface: "terminal",
@@ -410,7 +428,8 @@ export class TerminalInterceptor {
           criticalMatch: isCritical,
           criticalReplayPolicy,
           stopConfirmed: stopResult.stopped,
-          outcome: approvedOutcome
+          outcome: approvedOutcome,
+          approvalResolution: approval.resolution
         }
       });
       this.log(`Denied terminal command from "${context.terminal.name}": ${match.normalizedCommand}`);
@@ -427,7 +446,8 @@ export class TerminalInterceptor {
         criticalMatch: isCritical,
         criticalReplayPolicy,
         stopConfirmed: stopResult.stopped,
-        outcome: approvedOutcome
+        outcome: approvedOutcome,
+        approvalResolution: approval.resolution
       }
     });
 
@@ -915,6 +935,10 @@ function describePolicyBlockedReason(reason: "stopUnconfirmed"): string {
     case "stopUnconfirmed":
       return "Safe Exec could not confirm the original terminal stopped cleanly";
   }
+}
+
+function buildTerminalActionKey(command: string, cwd: vscode.Uri | undefined): string {
+  return `terminal:${command}:cwd:${cwd?.toString() ?? "unknown"}`;
 }
 
 function delay(milliseconds: number): Promise<void> {

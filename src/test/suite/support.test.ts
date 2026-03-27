@@ -18,6 +18,7 @@ suite("support utilities", () => {
 
     const text = vscode.window.activeTextEditor?.document.getText() ?? "";
     assert.match(text, /# Safe Exec Onboarding/);
+    assert.match(text, /## First-Run Diagnostic/);
     assert.match(text, /## Policy Bundles/);
     assert.match(text, /## Proxy And Wrapper Keybindings/);
     assert.match(text, /## Automation-Heavy Command Coverage/);
@@ -53,6 +54,7 @@ suite("support utilities", () => {
     const responder = new ScriptedApprovalResponder();
     const permissionUI = new PermissionUI(output, responder);
 
+    responder.enqueue("details");
     responder.enqueue("review");
     responder.enqueue("allow");
     assert.ok(permissionUI.compareRisk("critical", "high") > 0);
@@ -62,12 +64,15 @@ suite("support utilities", () => {
       source: "test",
       risk: "medium",
       summary: "echo safe-exec",
+      explanation: "Safe Exec is testing the preview and explanation flow.",
+      whyFlagged: ["Matched a scripted test rule."],
       preview: "echo safe-exec",
       previewLanguage: "shellscript"
     });
 
-    assert.equal(approved, true);
-    await waitFor(() => (vscode.window.activeTextEditor?.document.getText() ?? "").includes("```shellscript"));
+    assert.equal(approved.approved, true);
+    assert.equal(approved.resolution, "allow");
+    await waitFor(() => (vscode.window.activeTextEditor?.document.getText() ?? "").includes("## Preview"));
     assert.match(vscode.window.activeTextEditor?.document.getText() ?? "", /echo safe-exec/);
 
     const reviewHandle = responder.enqueueDeferred();
@@ -78,8 +83,70 @@ suite("support utilities", () => {
     denyHandle.deny();
     assert.equal(await responder.requestDecision(), "deny");
 
+    const detailsHandle = responder.enqueueDeferred();
+    detailsHandle.details();
+    assert.equal(await responder.requestDecision(), "details");
+
     output.dispose();
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+  });
+
+  test("permission UI stores medium-risk workspace exceptions and suppresses identical approved low-risk prompts", async () => {
+    const output = vscode.window.createOutputChannel("Safe Exec PermissionUI Trust Test");
+    const responder = new ScriptedApprovalResponder();
+    const workspaceState = new InMemoryMemento();
+    const permissionUI = new PermissionUI(output, responder, workspaceState);
+
+    responder.enqueue("allow-workspace");
+    const mediumFirst = await permissionUI.requestApproval({
+      title: "Workspace Exception Test",
+      source: "test",
+      risk: "medium",
+      summary: "safeExec.runProtectedCommand test.medium",
+      explanation: "This medium-risk test action is eligible for an exact workspace exception.",
+      whyFlagged: ["Matched a medium-risk scripted test rule."],
+      actionKey: "command:test.medium:[]",
+      workspaceTrustOption: {}
+    });
+    assert.equal(mediumFirst.approved, true);
+    assert.equal(mediumFirst.resolution, "workspace-exception");
+    assert.equal(permissionUI.getWorkspaceApprovalExceptionCount(), 1);
+
+    const mediumSecond = await permissionUI.requestApproval({
+      title: "Workspace Exception Test",
+      source: "test",
+      risk: "medium",
+      summary: "safeExec.runProtectedCommand test.medium",
+      actionKey: "command:test.medium:[]",
+      workspaceTrustOption: {}
+    });
+    assert.equal(mediumSecond.approved, true);
+    assert.equal(mediumSecond.resolution, "workspace-exception");
+
+    responder.enqueue("allow");
+    const lowFirst = await permissionUI.requestApproval({
+      title: "Low Risk Test",
+      source: "test",
+      risk: "low",
+      summary: "echo safe-exec-low",
+      actionKey: "terminal:echo safe-exec-low",
+      suppressRepeatedApprovedLowRisk: true
+    });
+    assert.equal(lowFirst.approved, true);
+    assert.equal(lowFirst.resolution, "allow");
+
+    const lowSecond = await permissionUI.requestApproval({
+      title: "Low Risk Test",
+      source: "test",
+      risk: "low",
+      summary: "echo safe-exec-low",
+      actionKey: "terminal:echo safe-exec-low",
+      suppressRepeatedApprovedLowRisk: true
+    });
+    assert.equal(lowSecond.approved, true);
+    assert.equal(lowSecond.resolution, "low-risk-repeat");
+
+    output.dispose();
   });
 
   test("ensureRulesFileExists creates a sample rules file for an absolute path", async () => {
@@ -111,3 +178,15 @@ suite("support utilities", () => {
     assert.equal(matchesAnyRegexPattern(["("], "safe-exec"), false);
   });
 });
+
+class InMemoryMemento implements Pick<vscode.Memento, "get" | "update"> {
+  private readonly state = new Map<string, unknown>();
+
+  public get<T>(key: string, defaultValue?: T): T {
+    return (this.state.has(key) ? (this.state.get(key) as T) : defaultValue) as T;
+  }
+
+  public async update(key: string, value: unknown): Promise<void> {
+    this.state.set(key, value);
+  }
+}

@@ -1,5 +1,9 @@
-import { renderKeybindingSummary } from "./keybindingInspector";
-import type { KeybindingInspection } from "./keybindingInspector";
+import {
+  getKeybindingDiagnosticSeverity,
+  renderKeybindingSummary,
+  summarizeKeybindingInspection,
+  type KeybindingInspection
+} from "./keybindingInspector";
 import {
   PROTECTED_COMMAND_VERIFICATION_NOTE,
   VERIFIED_EXPLICIT_PROXY_COMMAND_DEFINITIONS,
@@ -7,10 +11,28 @@ import {
 } from "./protectedCommandCatalog";
 import { POLICY_BUNDLES } from "./rules";
 
+export type OnboardingDiagnosticStatus = "ok" | "info" | "warning";
+
+export interface OnboardingDiagnosticEntry {
+  status: OnboardingDiagnosticStatus;
+  summary: string;
+  details: string[];
+}
+
+export interface OnboardingDiagnostics {
+  generatedAt: string;
+  shellIntegration: OnboardingDiagnosticEntry;
+  workspaceTrust: OnboardingDiagnosticEntry;
+  proxyKeybindings: OnboardingDiagnosticEntry;
+  policyBundles: OnboardingDiagnosticEntry;
+}
+
 export function createOnboardingMarkdown(options: {
   isEnabled: boolean;
   isTrustedWorkspace: boolean;
   keybindingInspection: KeybindingInspection;
+  diagnostics: OnboardingDiagnostics;
+  workspaceApprovalExceptionCount?: number;
 }): string {
   const bundleList = Object.values(POLICY_BUNDLES)
     .map((bundle) => `- \`${bundle.id}\`: ${bundle.description}`)
@@ -27,6 +49,18 @@ export function createOnboardingMarkdown(options: {
     "# Safe Exec Onboarding",
     "",
     `Protection is currently **${options.isEnabled ? "enabled" : "disabled"}**.`,
+    "",
+    "## First-Run Diagnostic",
+    "",
+    `Generated: ${options.diagnostics.generatedAt}`,
+    "",
+    renderDiagnosticSection("Shell Integration", options.diagnostics.shellIntegration),
+    "",
+    renderDiagnosticSection("Workspace Trust", options.diagnostics.workspaceTrust),
+    "",
+    renderDiagnosticSection("Proxy Keybindings", options.diagnostics.proxyKeybindings),
+    "",
+    renderDiagnosticSection("Selected Policy Bundles", options.diagnostics.policyBundles),
     "",
     "## What Safe Exec Covers",
     "",
@@ -51,6 +85,9 @@ export function createOnboardingMarkdown(options: {
     options.isTrustedWorkspace
       ? "- This workspace is trusted. Workspace Trust may enable more workspace features, but it is not a security boundary and does not replace Safe Exec approval."
       : "- This workspace is not trusted. Workspace Trust can reduce what VS Code enables automatically, but it is not a sandbox and Safe Exec remains a best-effort guardrail.",
+    options.workspaceApprovalExceptionCount && options.workspaceApprovalExceptionCount > 0
+      ? `- Safe Exec currently has ${options.workspaceApprovalExceptionCount} saved medium-risk workspace exception(s) for this workspace. Clear them from the Safe Exec menu if this workflow changes.`
+      : "- Safe Exec currently has no saved medium-risk workspace exceptions for this workspace.",
     "",
     renderKeybindingSummary(options.keybindingInspection),
     "",
@@ -80,6 +117,134 @@ export function createOnboardingMarkdown(options: {
     "- Review or create `.vscode/safe-exec.rules.json`.",
     "- Wire common shortcuts to Safe Exec proxy commands.",
     "- Enable policy bundles that match your stack.",
+    "- Clear saved medium-risk workspace exceptions if a workflow changes and you want prompts back.",
     "- Keep docs and expectations aligned with the extension's best-effort posture."
   ].join("\n");
+}
+
+export function createOnboardingDiagnostics(options: {
+  shellIntegrationAvailable: boolean;
+  shellIntegrationCheckedWithProbe: boolean;
+  isTrustedWorkspace: boolean;
+  keybindingInspection: KeybindingInspection;
+  selectedPolicyBundleIds: string[];
+  unknownPolicyBundleIds: string[];
+}): OnboardingDiagnostics {
+  const uniqueSelectedBundleIds = Array.from(new Set(options.selectedPolicyBundleIds));
+  const shellIntegration: OnboardingDiagnosticEntry = options.shellIntegrationAvailable
+    ? {
+        status: "ok",
+        summary: options.shellIntegrationCheckedWithProbe
+          ? "Shell integration was detected during the Safe Exec diagnostic check."
+          : "Shell integration has already been detected in this VS Code session.",
+        details: [
+          "Terminal approval prompts can appear when VS Code reports shell execution start events.",
+          "This remains best effort and post-start; Safe Exec still cannot guarantee a command never began."
+        ]
+      }
+    : {
+        status: "warning",
+        summary: options.shellIntegrationCheckedWithProbe
+          ? "Safe Exec did not detect shell integration during the diagnostic check."
+          : "Safe Exec has not observed shell integration in this session yet.",
+        details: [
+          "Risky terminal prompts only appear after VS Code shell integration reports a command start.",
+          "Open an integrated terminal and confirm shell integration is enabled if you expect terminal approvals."
+        ]
+      };
+
+  const workspaceTrust: OnboardingDiagnosticEntry = options.isTrustedWorkspace
+    ? {
+        status: "ok",
+        summary: "This workspace is trusted.",
+        details: [
+          "Workspace Trust may enable more workspace features.",
+          "It is not a sandbox and it does not replace Safe Exec approval."
+        ]
+      }
+    : {
+        status: "warning",
+        summary: "This workspace is not trusted.",
+        details: [
+          "Workspace Trust can reduce some automatic workspace behavior.",
+          "It is not a sandbox and Safe Exec remains best effort."
+        ]
+      };
+
+  const proxyKeybindings: OnboardingDiagnosticEntry = {
+    status: toOnboardingDiagnosticStatus(getKeybindingDiagnosticSeverity(options.keybindingInspection)),
+    summary: summarizeKeybindingInspection(options.keybindingInspection),
+    details: options.keybindingInspection.error
+      ? [options.keybindingInspection.error]
+      : [
+          ...options.keybindingInspection.warnings.map((warning) => `Warning: ${warning}`),
+          ...options.keybindingInspection.advisories.map((advisory) => `Advisory: ${advisory}`),
+          ...(options.keybindingInspection.warnings.length === 0 && options.keybindingInspection.advisories.length === 0
+            ? ["No explicit raw guarded keybinding mismatches were found in user keybindings.json."]
+            : [])
+        ]
+  };
+
+  const policyBundles: OnboardingDiagnosticEntry =
+    options.unknownPolicyBundleIds.length > 0
+      ? {
+          status: "warning",
+          summary: `Unknown policy bundle IDs are configured: ${options.unknownPolicyBundleIds.join(", ")}.`,
+          details: [
+            ...options.unknownPolicyBundleIds.map((bundleId) => `Unknown bundle: ${bundleId}`),
+            ...(uniqueSelectedBundleIds.length > 0
+              ? uniqueSelectedBundleIds.flatMap((bundleId) => {
+                  const bundle = POLICY_BUNDLES[bundleId];
+                  return bundle ? [`Selected bundle: ${bundle.id} (${bundle.description})`] : [];
+                })
+              : ["No valid opt-in policy bundles are selected right now."])
+          ]
+        }
+      : uniqueSelectedBundleIds.length > 0
+      ? {
+          status: "ok",
+          summary: `Selected policy bundles: ${uniqueSelectedBundleIds.join(", ")}.`,
+          details: uniqueSelectedBundleIds.map((bundleId) => {
+            const bundle = POLICY_BUNDLES[bundleId];
+            return bundle ? `${bundle.id}: ${bundle.description}` : bundleId;
+          })
+        }
+      : {
+          status: "info",
+          summary: "No opt-in policy bundles are selected right now.",
+          details: ["Enable bundle presets in settings when you want stack-specific command and path coverage."]
+        };
+
+  return {
+    generatedAt: new Date().toISOString(),
+    shellIntegration,
+    workspaceTrust,
+    proxyKeybindings,
+    policyBundles
+  };
+}
+
+function renderDiagnosticSection(title: string, entry: OnboardingDiagnosticEntry): string {
+  return [
+    `### ${title}`,
+    "",
+    `- Status: ${formatDiagnosticStatus(entry.status)}`,
+    `- Summary: ${entry.summary}`,
+    ...entry.details.map((detail) => `- Detail: ${detail}`)
+  ].join("\n");
+}
+
+function formatDiagnosticStatus(status: OnboardingDiagnosticStatus): string {
+  switch (status) {
+    case "ok":
+      return "OK";
+    case "info":
+      return "Info";
+    case "warning":
+      return "Attention";
+  }
+}
+
+function toOnboardingDiagnosticStatus(status: "ok" | "info" | "warning"): OnboardingDiagnosticStatus {
+  return status;
 }

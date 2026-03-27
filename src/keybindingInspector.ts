@@ -28,6 +28,8 @@ export interface RecommendedKeybinding extends KeybindingEntry {
   description: string;
 }
 
+export type KeybindingDiagnosticSeverity = "ok" | "info" | "warning";
+
 interface GuardedBinding {
   rawCommand: string;
   proxyCommand: string;
@@ -143,6 +145,34 @@ export function renderKeybindingSummary(inspection: KeybindingInspection): strin
   lines.push(renderRecommendedKeybindingsJson().trimEnd());
   lines.push("```");
   return lines.join("\n");
+}
+
+export function summarizeKeybindingInspection(inspection: KeybindingInspection): string {
+  if (inspection.error) {
+    return `Keybinding inspection: ${inspection.error}`;
+  }
+
+  if (inspection.warnings.length > 0) {
+    return `${inspection.warnings.length} raw guarded keybinding(s) bypass a matching Safe Exec proxy binding.`;
+  }
+
+  if (inspection.advisories.length > 0) {
+    return `${inspection.advisories.length} guarded command(s) still have no Safe Exec proxy keybinding, so raw entry points are still likely to be used.`;
+  }
+
+  return "No explicit raw guarded keybinding mismatches were found in user keybindings.json.";
+}
+
+export function getKeybindingDiagnosticSeverity(inspection: KeybindingInspection): KeybindingDiagnosticSeverity {
+  if (inspection.error || inspection.warnings.length > 0) {
+    return "warning";
+  }
+
+  if (inspection.advisories.length > 0) {
+    return "info";
+  }
+
+  return "ok";
 }
 
 function collectFindings(entries: readonly KeybindingEntry[]): { warnings: string[]; advisories: string[] } {

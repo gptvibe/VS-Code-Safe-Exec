@@ -300,11 +300,19 @@ export class EditInterceptor {
       after: event.newText
     });
 
-    const approved = await this.options.permissionUI.requestApproval({
+    const approval = await this.options.permissionUI.requestApproval({
       title: "Reapply suspicious edit after rollback?",
       source: `edit:${relativePath}`,
       risk: evaluation.risk,
       summary: `Safe Exec rolled back a large or sensitive edit in ${relativePath}.`,
+      explanation:
+        "This is a post-change rollback-and-reapply flow. VS Code already applied the edit, Safe Exec restored the previous snapshot, and approval decides whether to replay the captured change.",
+      whyFlagged: [
+        ...evaluation.reasons,
+        `Changed characters: ${evaluation.changedCharacters}`,
+        `Affected lines: ${evaluation.affectedLines}`,
+        `Edit ranges captured: ${event.changes.length}`
+      ],
       detail: [
         `Reasons: ${evaluation.reasons.join("; ")}`,
         `Changed characters: ${evaluation.changedCharacters}`,
@@ -333,7 +341,7 @@ export class EditInterceptor {
       return;
     }
 
-    if (!approved) {
+    if (!approval.approved) {
       this.log(`Denied suspicious edit in ${document.uri.toString()}.`);
       this.options.auditLog.record({
         action: "denied",
@@ -342,7 +350,8 @@ export class EditInterceptor {
         summary: `Kept rollback in ${relativePath}`,
         risk: evaluation.risk,
         metadata: {
-          reapplyOutcome: "denied"
+          reapplyOutcome: "denied",
+          approvalResolution: approval.resolution
         }
       });
       this.captureSnapshot(currentDocument);
@@ -354,7 +363,10 @@ export class EditInterceptor {
       surface: "edit",
       source: `edit:${relativePath}`,
       summary: `Approved suspicious edit in ${relativePath}`,
-      risk: evaluation.risk
+      risk: evaluation.risk,
+      metadata: {
+        approvalResolution: approval.resolution
+      }
     });
 
     if (currentDocument.version !== rollbackVersion || currentDocument.getText() !== previousSnapshot.text) {
