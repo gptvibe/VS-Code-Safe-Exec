@@ -12,7 +12,7 @@ Safe Exec combines built-in defaults with workspace rules, selected settings, an
 - `editHeuristics`
 - `fileOps`
 
-`policyBundles` lets a workspace opt into stack-specific presets without copying large rule lists by hand.
+`policyBundles` lets a workspace opt into stack- and workflow-specific presets without copying large rule lists by hand.
 
 ## Example rules file
 
@@ -202,10 +202,20 @@ Built-in bundle IDs:
   Protect Terraform apply, Helm changes, Kubernetes mutations, and related manifests.
 - `git-ci`
   Protect force-pushes, workflow triggers, and common CI pipeline files.
+- `system-admin`
+  Protect destructive disk and volume tooling, partition rewrites, and storage administration surfaces across Linux, macOS, and Windows.
+- `persistence`
+  Protect service and scheduled-task persistence, autorun registration, and shell profile mutation across Unix shells, PowerShell, launchd, systemd, cron, and Windows Task Scheduler.
+- `secrets-identity`
+  Protect credential and identity stores such as `.ssh`, cloud CLI config, Docker auth, kubeconfig, and common upload-style commands that can move local files over the network.
+- `cloud-release`
+  Protect package and chart publishing, container registry pushes, release publication, and common deploy commands for AWS, Azure, Google Cloud, serverless frameworks, and hosting CLIs.
 
 Bundle coverage is intentionally incomplete. Bundles are starter presets, not a claim of full stack security.
 
 For file operations, bundles reuse the same stack-specific protected-path additions already used by edit heuristics. This keeps edit protection and file-operation protection aligned on the same high-value paths.
+
+Some bundles also add file-operation-sensitive extensions and file names when path matching alone is not enough. `secrets-identity`, for example, raises recovery priority for common encrypted secret stores and SSH private-key file names in addition to protecting their directory paths.
 
 ## Built-in protected-path defaults
 

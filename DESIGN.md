@@ -223,6 +223,10 @@ Built-in policy bundles:
 - `docker`
 - `terraform-kubernetes`
 - `git-ci`
+- `system-admin`
+- `persistence`
+- `secrets-identity`
+- `cloud-release`
 
 Merge behavior:
 

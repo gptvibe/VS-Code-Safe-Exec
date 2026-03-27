@@ -204,17 +204,25 @@
               "python",
               "docker",
               "terraform-kubernetes",
-              "git-ci"
+              "git-ci",
+              "system-admin",
+              "persistence",
+              "secrets-identity",
+              "cloud-release"
             ],
             "enumDescriptions": [
-              "Add best-effort rules for common Node/web deploy and JavaScript toolchain surfaces.",
-              "Add best-effort rules for common Python packaging and environment surfaces.",
-              "Add best-effort rules for common Docker lifecycle and configuration surfaces.",
-              "Add best-effort rules for common Terraform, Helm, and Kubernetes mutation surfaces.",
-              "Add best-effort rules for common Git force-push and CI workflow surfaces."
+              "Protect package publishing, deploy-style scripts, env files, and JS toolchain config.",
+              "Protect packaging, lockfiles, Python env configuration, and dependency sync commands.",
+              "Protect container/image cleanup, compose changes, and Docker build configuration.",
+              "Protect infrastructure apply/change commands and IaC manifests.",
+              "Protect force-pushes, workflow triggers, and CI pipeline configuration.",
+              "Protect destructive disk and volume tooling, partition rewrites, and storage administration surfaces.",
+              "Protect service/task persistence, shell profile mutation, and autorun configuration across platforms.",
+              "Protect credential and identity files, secret-bearing key material, and outbound upload-style commands.",
+              "Protect registry publish flows, container pushes, release tooling, and common cloud deploy commands."
             ]
           },
-          "description": "Opt-in Safe Exec policy bundle IDs. Built-in bundles add stack-specific command and path rules; they do not create transparent interception."
+          "description": "Opt-in Safe Exec policy bundle IDs. Built-in bundles add stack- and workflow-specific command, path, and sensitive-file rules; they do not create transparent interception."
         },
         "safeExec.protectedCommands": {
           "type": "array",

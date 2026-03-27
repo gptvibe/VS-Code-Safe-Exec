@@ -188,13 +188,17 @@ Workspace Trust can reduce some automatic workspace behavior in VS Code. It does
 
 ## Policy bundles
 
-Safe Exec includes opt-in policy bundles for common stacks:
+Safe Exec includes opt-in policy bundles for common stacks and risky workflows:
 
 - `node-web`
 - `python`
 - `docker`
 - `terraform-kubernetes`
 - `git-ci`
+- `system-admin`
+- `persistence`
+- `secrets-identity`
+- `cloud-release`
 
 Bundles add stack-specific command rules and protected-path patterns. File-operation protection reuses those path patterns instead of inventing a separate stack model, and it can also merge bundle-provided file-op-sensitive names or extensions when a bundle defines them.
 
@@ -205,6 +209,10 @@ Examples:
 - `docker` adds container lifecycle and Docker config patterns.
 - `terraform-kubernetes` adds Terraform apply, Helm, and Kubernetes mutation patterns.
 - `git-ci` adds force-push and CI workflow patterns.
+- `system-admin` adds cross-platform disk, volume, and partition-destruction patterns plus storage-admin config files.
+- `persistence` adds service, scheduled-task, autorun, and shell-profile persistence patterns across Linux, macOS, and Windows.
+- `secrets-identity` adds credential-store and identity-file path protection plus upload-style network command coverage.
+- `cloud-release` adds registry publish, container push, release publication, and common cloud deploy command coverage.
 
 ## Quick start
 
