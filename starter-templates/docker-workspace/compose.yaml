@@ -1,0 +1,24 @@
+services:
+  workspace:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sleep infinity
+    working_dir: /workspace
+    volumes:
+      - ${SAFE_EXEC_WORKSPACE:-.}:/workspace
+      - workspace-home:/home/dev
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    init: true
+    read_only: true
+    stdin_open: true
+    tty: true
+
+volumes:
+  workspace-home:

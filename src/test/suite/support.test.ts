@@ -26,6 +26,22 @@ suite("support utilities", () => {
     await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
   });
 
+  test("open hardening checklist command renders the layered setup guide", async () => {
+    const api = await activateExtension();
+    await resetTestState(api);
+
+    await vscode.commands.executeCommand("safeExec.openHardeningChecklist");
+    await waitFor(() => (vscode.window.activeTextEditor?.document.getText() ?? "").includes("# Safe Exec Hardening Checklist"));
+
+    const text = vscode.window.activeTextEditor?.document.getText() ?? "";
+    assert.match(text, /# Safe Exec Hardening Checklist/);
+    assert.match(text, /agent hooks/i);
+    assert.match(text, /does not replace sandboxing/i);
+    assert.match(text, /starter-templates\/devcontainer\/devcontainer\.json/);
+
+    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+  });
+
   test("open recommended keybindings command renders proxy bindings json", async () => {
     const api = await activateExtension();
     await resetTestState(api);

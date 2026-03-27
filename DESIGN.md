@@ -208,12 +208,26 @@ Safe Exec includes:
 - a main command opened by the status bar item
 - a walkthrough contribution
 - recommended proxy keybinding snippets
+- a bundled hardening checklist command with optional starter templates for layered workflows
 - warnings when common raw guarded keybindings are found without matching Safe Exec proxy bindings
 - advisories when common guarded commands still have no Safe Exec proxy keybinding
 - a status bar indicator that surfaces disabled, untrusted, and partial-coverage states
 - file-operation history and restore commands in the main menu
 
 The onboarding, keybinding, and restore flows are intentionally manual. Safe Exec can recommend or expose safer paths, but it does not silently rewrite user keybindings or silently reverse file operations.
+
+## Layered hardening guidance
+
+The hardening checklist is intentionally documentation-first rather than enforcement-first.
+
+Its job is to position Safe Exec correctly inside a broader workflow:
+
+- Safe Exec for approval, review, and bounded recovery inside VS Code
+- Workspace Trust for reduced automatic workspace behavior
+- agent hooks for pre-run policy checks and explicit routing
+- containers, Docker workspaces, VMs, remote hosts, and least-privilege accounts for isolation
+
+That separation keeps the product honest. Safe Exec improves friction and visibility in the editor, while sandboxing and hook systems handle different control points.
 
 ## Rule engine and policy bundles
 

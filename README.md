@@ -17,6 +17,7 @@ Safe Exec is deliberately not a sandbox. It does not claim hard isolation, guara
 - Recoverable snapshots are captured for supported delete and rename flows when file size, file count, and file type limits allow it.
 - Oversized files can fall back to metadata-only entries, and unsupported or unreadable targets can fall back to observed-only entries.
 - Workspace Trust is surfaced honestly, but it is not treated as a security boundary.
+- A hardening checklist and starter templates show how to use Safe Exec with Workspace Trust, agent hooks, and sandboxing instead of claiming it replaces them.
 - Recent approvals, denials, degraded terminal replays, edit outcomes, file-operation events, and restore outcomes are recorded per workspace in local history.
 
 ## Illustrative UX
@@ -144,6 +145,7 @@ Safe Exec includes a first-run onboarding flow, a main command, and a native wal
 
 - `Safe Exec: Open Safe Exec`
 - `Safe Exec: Open Onboarding`
+- `Safe Exec: Open Hardening Checklist`
 - `Get Started with Safe Exec`
 - `Safe Exec: Open Recommended Proxy And Wrapper Keybindings`
 
@@ -156,6 +158,8 @@ The onboarding guide explains:
 - which automation-heavy built-in command IDs were verified for this extension
 - which policy bundles are available
 - how file-operation recovery works and where it does not apply
+- how to layer Safe Exec with Workspace Trust, agent hooks, and sandboxing
+- where the optional starter templates for dev containers, Docker workspaces, and hook guidance live
 
 Safe Exec can inspect the user `keybindings.json` file, warn when common raw guarded commands are bound directly without an equivalent Safe Exec proxy binding, and call out when common guarded commands still have no proxy shortcut at all. It opens recommended proxy and wrapper JSON snippets beside the user keybindings file, but it does not edit keybindings automatically.
 
@@ -197,6 +201,22 @@ Safe Exec integrates with VS Code Workspace Trust in an honest way:
 
 Workspace Trust can reduce some automatic workspace behavior in VS Code. It does not isolate shell commands, extensions, or the operating system.
 
+## Layered hardening
+
+Safe Exec is strongest when it is one part of a layered workflow:
+
+- Safe Exec handles approval, review, recent activity, and bounded recovery inside VS Code.
+- Workspace Trust can reduce some automatic workspace behavior, but it is not sandboxing.
+- Agent hooks can reject or reroute risky automation before it runs.
+- Containers, Docker workspaces, VMs, remote hosts, and least-privilege accounts provide isolation that Safe Exec does not claim to replace.
+
+Use `Safe Exec: Open Hardening Checklist` for a checklist that ties those layers together, plus optional starter files:
+
+- [`HARDENING_CHECKLIST.md`](HARDENING_CHECKLIST.md)
+- [`starter-templates/devcontainer/devcontainer.json`](starter-templates/devcontainer/devcontainer.json)
+- [`starter-templates/docker-workspace/compose.yaml`](starter-templates/docker-workspace/compose.yaml)
+- [`starter-templates/hooks/README.md`](starter-templates/hooks/README.md)
+
 ## Policy bundles
 
 Safe Exec includes opt-in policy bundles for common stacks and risky workflows:
@@ -230,9 +250,10 @@ Examples:
 1. Install the extension.
 2. Open `Safe Exec: Open Safe Exec` or click the Safe Exec status bar item.
 3. Review `Safe Exec: Open Recommended Proxy And Wrapper Keybindings` and route the shortcuts or automation commands you actually use through Safe Exec.
-4. Open `Safe Exec: Open Rules File` and enable any policy bundles that match your stack.
-5. Review `Safe Exec: Show Recent File Operations` so you know where recoverable delete and rename history will appear.
-6. Keep an eye on the status bar state, `Safe Exec: Show Recent Activity`, and `Safe Exec: Show Recent File Operations`.
+4. Open `Safe Exec: Open Hardening Checklist` and decide which hook and sandboxing layers you want around the workspace.
+5. Open `Safe Exec: Open Rules File` and enable any policy bundles that match your stack.
+6. Review `Safe Exec: Show Recent File Operations` so you know where recoverable delete and rename history will appear.
+7. Keep an eye on the status bar state, `Safe Exec: Show Recent Activity`, and `Safe Exec: Show Recent File Operations`.
 
 Example workspace rules file:
 
@@ -369,6 +390,7 @@ CI runs the quality gate on Ubuntu and the extension test suite on Ubuntu, Windo
 - [COVERAGE_MATRIX.md](COVERAGE_MATRIX.md) lists current surface-by-surface coverage and bypasses.
 - [CONTRIBUTING.md](CONTRIBUTING.md) explains the local workflow and CI quality gates.
 - [DESIGN.md](DESIGN.md) explains the architecture and tradeoffs.
+- [HARDENING_CHECKLIST.md](HARDENING_CHECKLIST.md) explains how to layer Safe Exec with Workspace Trust, agent hooks, and sandboxing.
 - [RULES.md](RULES.md) explains rules, bundles, and merge behavior.
 - [SECURITY.md](SECURITY.md) explains the security posture, bypasses, and residual risk.
 - [AGENTS.md](AGENTS.md) explains the agent behavior expected in this repository.

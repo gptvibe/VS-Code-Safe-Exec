@@ -24,6 +24,7 @@
     "onCommand:safeExec.showEffectiveRules",
     "onCommand:safeExec.reloadRules",
     "onCommand:safeExec.openOnboarding",
+    "onCommand:safeExec.openHardeningChecklist",
     "onCommand:safeExec.installRecommendedKeybindings",
     "onCommand:safeExec.showAuditHistory",
     "onCommand:safeExec.showRecentFileOperations",
@@ -69,6 +70,11 @@
       {
         "command": "safeExec.openOnboarding",
         "title": "Safe Exec: Open Onboarding",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.openHardeningChecklist",
+        "title": "Safe Exec: Open Hardening Checklist",
         "category": "Safe Exec"
       },
       {
@@ -170,6 +176,18 @@
             },
             "completionEvents": [
               "onCommand:safeExec.installRecommendedKeybindings"
+            ]
+          },
+          {
+            "id": "safeExec.reviewHardeningChecklist",
+            "title": "Open the hardening checklist",
+            "description": "Review the layered hardening guide that positions Safe Exec alongside Workspace Trust, agent hooks, and sandboxing, with optional starter templates.",
+            "media": {
+              "image": "media/onboarding.svg",
+              "altText": "Illustrative Safe Exec layered hardening guide"
+            },
+            "completionEvents": [
+              "onCommand:safeExec.openHardeningChecklist"
             ]
           },
           {

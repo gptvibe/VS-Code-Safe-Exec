@@ -150,6 +150,22 @@ In practice:
 
 Workspace Trust can reduce some VS Code behavior. It does not isolate the shell, other extensions, or the host operating system.
 
+## Layered hardening guidance
+
+Safe Exec should be deployed as one layer in a broader safety model:
+
+- Safe Exec adds approval, review, local visibility, and bounded recovery inside VS Code.
+- Workspace Trust can reduce some automatic workspace behavior, but it is not sandboxing.
+- Agent hooks can block or reroute risky automation before it reaches the terminal, editor, or command surface.
+- Containers, Docker workspaces, VMs, remote hosts, OS permissions, and least-privilege accounts provide isolation that Safe Exec does not claim to replace.
+
+The bundled hardening checklist and starter templates support that layered setup:
+
+- [`HARDENING_CHECKLIST.md`](HARDENING_CHECKLIST.md)
+- [`starter-templates/devcontainer/devcontainer.json`](starter-templates/devcontainer/devcontainer.json)
+- [`starter-templates/docker-workspace/compose.yaml`](starter-templates/docker-workspace/compose.yaml)
+- [`starter-templates/hooks/README.md`](starter-templates/hooks/README.md)
+
 ## Audit history and storage
 
 Safe Exec records local history for events such as:
@@ -187,6 +203,8 @@ Safe Exec does not reliably cover:
 Residual risk remains even when Safe Exec prompts correctly. Users should still rely on:
 
 - least-privilege local accounts
+- deliberate Workspace Trust decisions
+- agent-side hooks or policy wrappers for pre-run checks
 - containers or VMs for risky automation
 - repository protections and review gates
 - backups and recovery plans

@@ -241,6 +241,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     });
   };
 
+  const openBundledDocument = async (relativePath: string): Promise<void> => {
+    const uri = vscode.Uri.joinPath(context.extensionUri, relativePath);
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document, {
+      preview: false,
+      viewColumn: vscode.ViewColumn.Beside
+    });
+  };
+
   const openOnboarding = async (options: { runShellIntegrationProbe?: boolean } = {}): Promise<void> => {
     const onboardingContext = await buildOnboardingContext({
       runShellIntegrationProbe: options.runShellIntegrationProbe ?? false
@@ -283,6 +292,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
           label: "Review Proxy And Wrapper Keybindings",
           description: "Open your keybindings.json beside the recommended Safe Exec routing snippet",
           action: "keybindings" as const
+        },
+        {
+          label: "Open Hardening Checklist",
+          description: "Layer Safe Exec with Workspace Trust, agent hooks, containers, and sandboxing",
+          action: "hardening" as const
         },
         {
           label: "Open Rules File",
@@ -342,6 +356,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
         return;
       case "keybindings":
         await openRecommendedKeybindings();
+        return;
+      case "hardening":
+        await vscode.commands.executeCommand("safeExec.openHardeningChecklist");
         return;
       case "rules":
         await vscode.commands.executeCommand("safeExec.openRulesFile");
@@ -489,6 +506,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     }),
     vscode.commands.registerCommand("safeExec.openOnboarding", async () => {
       await openOnboarding();
+    }),
+    vscode.commands.registerCommand("safeExec.openHardeningChecklist", async () => {
+      await openBundledDocument("HARDENING_CHECKLIST.md");
     }),
     vscode.commands.registerCommand("safeExec.clearWorkspaceApprovalExceptions", async () => {
       const cleared = await permissionUI.clearWorkspaceApprovalExceptions();

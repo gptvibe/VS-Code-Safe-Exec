@@ -1,0 +1,36 @@
+{
+  "name": "safe-exec-hardened-workspace",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "remoteUser": "vscode",
+  "overrideCommand": false,
+  "init": true,
+  "containerEnv": {
+    "SAFE_EXEC_WORKSPACE_MODE": "devcontainer"
+  },
+  "mounts": [
+    "source=safe-exec-node-cache,target=/home/vscode/.npm,type=volume"
+  ],
+  "runArgs": [
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges:true",
+    "--pids-limit=256"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "security.workspace.trust.enabled": true,
+        "extensions.autoCheckUpdates": false,
+        "extensions.autoUpdate": false,
+        "safeExec.enabled": true,
+        "safeExec.policyBundles": [
+          "docker"
+        ]
+      }
+    }
+  }
+}
