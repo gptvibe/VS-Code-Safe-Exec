@@ -1,11 +1,19 @@
+import { createHash } from "crypto";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { promisify } from "util";
 import * as vscode from "vscode";
+import { gunzip, gzip } from "zlib";
 import type { RiskLevel } from "./rules";
+
+const gzipAsync = promisify(gzip);
+const gunzipAsync = promisify(gunzip);
 
 export type FileOperationKind = "create" | "delete" | "rename";
 export type FileOperationStatus = "pending" | "completed" | "denied" | "restored" | "restore-failed";
 export type FileSnapshotKind = "text" | "binary" | "metadata-only" | "none";
+export type SnapshotCompression = "none" | "gzip";
+export type RestorePreviewAction = "restore" | "move" | "conflict-copy" | "skip" | "unavailable";
 
 export interface FileOperationSnapshotInput {
   entryId?: string;
@@ -45,6 +53,9 @@ export interface FileOperationSnapshotRecord {
   subtreeFileCount?: number;
   snapshotKind: FileSnapshotKind;
   snapshotStoragePath?: string;
+  snapshotContentHash?: string;
+  snapshotCompression?: SnapshotCompression;
+  snapshotStoredBytes?: number;
   detail?: string;
 }
 
@@ -89,30 +100,79 @@ export interface RestoreFileOperationResult {
   failureDetails: string[];
 }
 
+export interface RestorePreviewItem {
+  label: string;
+  action: RestorePreviewAction;
+  detail: string;
+}
+
+export interface RestorePreviewResult {
+  operation?: FileOperationRecord;
+  totalEntries: number;
+  directRestoreCount: number;
+  moveCount: number;
+  conflictCopyCount: number;
+  skippedCount: number;
+  unavailableCount: number;
+  partial: boolean;
+  summary: string;
+  items: RestorePreviewItem[];
+}
+
 interface FileOperationIndex {
-  version: 1;
+  version: 2;
   operations: FileOperationRecord[];
+}
+
+interface StoredSnapshotContent {
+  contentHash: string;
+  compression: SnapshotCompression;
+  storagePath: string;
+  storedBytes: number;
+}
+
+interface ExistingPathState {
+  exists: boolean;
+  isDirectory: boolean;
+  content?: Buffer;
+}
+
+interface RestorePlan {
+  action: "mkdir" | "write" | "move" | "write-conflict-copy" | "skip" | "fail";
+  targetPath?: string;
+  sourcePath?: string;
+  content?: Buffer;
+  warning?: string;
+  failure?: string;
+  previewAction: RestorePreviewAction;
+  previewDetail: string;
 }
 
 const INDEX_FILE_NAME = "index.json";
 const SNAPSHOT_DIRECTORY_NAME = "snapshots";
+const BLOB_DIRECTORY_NAME = "blobs";
 const MAX_STORED_OPERATIONS = 60;
 const MAX_TOTAL_SNAPSHOT_BYTES = 20 * 1024 * 1024;
+const TEXT_COMPRESSION_MIN_BYTES = 1024;
+const TEXT_COMPRESSION_MIN_SAVINGS_BYTES = 96;
+const RESTORE_CONFLICT_SUFFIX = ".safe-exec-restore";
 
 export class FileOperationRecoveryStore {
   private readonly indexPath: string;
   private readonly snapshotRootPath: string;
+  private readonly blobRootPath: string;
   private queue: Promise<unknown> = Promise.resolve();
   private indexCache: FileOperationIndex | undefined;
 
   public constructor(private readonly rootUri: vscode.Uri, private readonly output: vscode.OutputChannel) {
     this.indexPath = path.join(this.rootUri.fsPath, INDEX_FILE_NAME);
     this.snapshotRootPath = path.join(this.rootUri.fsPath, SNAPSHOT_DIRECTORY_NAME);
+    this.blobRootPath = path.join(this.snapshotRootPath, BLOB_DIRECTORY_NAME);
   }
 
   public async initialize(): Promise<void> {
     await this.enqueue(async () => {
-      await fs.mkdir(this.snapshotRootPath, { recursive: true });
+      await fs.mkdir(this.blobRootPath, { recursive: true });
       await this.loadIndex();
     });
   }
@@ -121,9 +181,9 @@ export class FileOperationRecoveryStore {
     await this.enqueue(async () => {
       await fs.rm(this.rootUri.fsPath, { recursive: true, force: true });
       this.indexCache = undefined;
-      await fs.mkdir(this.snapshotRootPath, { recursive: true });
+      await fs.mkdir(this.blobRootPath, { recursive: true });
       await this.persistIndex({
-        version: 1,
+        version: 2,
         operations: []
       });
     });
@@ -134,9 +194,6 @@ export class FileOperationRecoveryStore {
       await this.ensureInitialized();
 
       const operationId = input.id ?? createOperationId();
-      const operationSnapshotPath = path.join(this.snapshotRootPath, operationId);
-      await fs.mkdir(operationSnapshotPath, { recursive: true });
-
       let snapshotBytesCaptured = 0;
       let snapshotCount = 0;
       let metadataOnlyCount = 0;
@@ -146,14 +203,21 @@ export class FileOperationRecoveryStore {
       for (const [index, file] of input.files.entries()) {
         const entryId = file.entryId ?? `${index + 1}`;
         let snapshotStoragePath: string | undefined;
+        let snapshotContentHash: string | undefined;
+        let snapshotCompression: SnapshotCompression | undefined;
+        let snapshotStoredBytes: number | undefined;
 
         if (file.snapshotContent !== undefined) {
-          const extension = file.snapshotKind === "text" ? ".txt" : ".bin";
-          snapshotStoragePath = path.join("snapshots", operationId, `${entryId}${extension}`);
-          const absoluteSnapshotPath = path.join(this.rootUri.fsPath, snapshotStoragePath);
-          const content = typeof file.snapshotContent === "string" ? Buffer.from(file.snapshotContent, "utf8") : Buffer.from(file.snapshotContent);
-          await fs.writeFile(absoluteSnapshotPath, content);
-          snapshotBytesCaptured += content.byteLength;
+          const content =
+            typeof file.snapshotContent === "string"
+              ? Buffer.from(file.snapshotContent, "utf8")
+              : Buffer.from(file.snapshotContent);
+          const stored = await this.storeSnapshotContent(file.snapshotKind, content);
+          snapshotStoragePath = stored.storagePath;
+          snapshotContentHash = stored.contentHash;
+          snapshotCompression = stored.compression;
+          snapshotStoredBytes = stored.storedBytes;
+          snapshotBytesCaptured += stored.storedBytes;
           snapshotCount += 1;
         } else if (file.snapshotKind === "metadata-only" && !file.isDirectory) {
           metadataOnlyCount += 1;
@@ -171,6 +235,9 @@ export class FileOperationRecoveryStore {
           subtreeFileCount: file.subtreeFileCount,
           snapshotKind: file.snapshotKind,
           snapshotStoragePath,
+          snapshotContentHash,
+          snapshotCompression,
+          snapshotStoredBytes,
           detail: file.detail
         });
       }
@@ -274,8 +341,41 @@ export class FileOperationRecoveryStore {
     });
   }
 
+  public async previewRestoreOperation(operationId: string, limit = 8): Promise<RestorePreviewResult> {
+    return this.enqueue(async () => {
+      await this.ensureInitialized();
+      const indexData = await this.loadIndex();
+      const operation = indexData.operations.find((candidate) => candidate.id === operationId);
+      if (!operation) {
+        return {
+          operation: undefined,
+          totalEntries: 0,
+          directRestoreCount: 0,
+          moveCount: 0,
+          conflictCopyCount: 0,
+          skippedCount: 0,
+          unavailableCount: 0,
+          partial: true,
+          summary: "Operation was not found in recovery storage.",
+          items: []
+        };
+      }
+
+      return this.buildRestorePreview(operation, limit);
+    });
+  }
+
   public async renderMarkdown(limit = 20): Promise<string> {
     const operations = await this.getRecentOperations(limit);
+    const previews = new Map<string, RestorePreviewResult>();
+    await Promise.all(
+      operations
+        .filter((operation) => operation.recoverable)
+        .map(async (operation) => {
+          previews.set(operation.id, await this.previewRestoreOperation(operation.id, 5));
+        })
+    );
+
     const lines = [
       "# Safe Exec Recent File Operations",
       "",
@@ -309,11 +409,15 @@ export class FileOperationRecoveryStore {
         lines.push(`- Detail: ${operation.detail}`);
       }
 
-      const previewFiles = operation.files.slice(0, 8).map((file) => {
-        const snapshotLabel = file.snapshotKind === "none" ? "observed only" : file.snapshotKind;
-        return `${file.label} (${snapshotLabel})`;
-      });
+      const preview = previews.get(operation.id);
+      if (preview) {
+        lines.push(`- Restore preview: ${preview.summary}`);
+        if (preview.items.length > 0) {
+          lines.push(`- Preview entries: ${preview.items.map((item) => `${item.label} (${item.action})`).join(", ")}`);
+        }
+      }
 
+      const previewFiles = operation.files.slice(0, 8).map((file) => formatSnapshotListEntry(file));
       if (previewFiles.length > 0) {
         lines.push(`- Entries: ${previewFiles.join(", ")}`);
       }
@@ -362,11 +466,11 @@ export class FileOperationRecoveryStore {
 
       const orderedFiles = [...operation.files].sort(compareSnapshotRecords);
       for (const file of orderedFiles) {
-        const restoreOutcome =
+        const plan =
           operation.kind === "delete"
-            ? await this.restoreDeletedEntry(file)
-            : await this.restoreRenamedEntry(file);
-
+            ? await this.planDeletedEntryRestore(file)
+            : await this.planRenamedEntryRestore(file);
+        const restoreOutcome = await this.executeRestorePlan(file, plan);
         result.restoredCount += restoreOutcome.restoredCount;
         result.failedCount += restoreOutcome.failedCount;
         result.skippedCount += restoreOutcome.skippedCount;
@@ -381,97 +485,329 @@ export class FileOperationRecoveryStore {
     });
   }
 
-  private async restoreDeletedEntry(file: FileOperationSnapshotRecord): Promise<RestoreFileOperationResult> {
-    const result = emptyRestoreResult();
-    const targetUri = vscode.Uri.parse(file.originalUri);
-
-    if (file.isDirectory) {
-      await fs.mkdir(targetUri.fsPath, { recursive: true });
-      result.restoredCount += 1;
-      return result;
+  private async buildRestorePreview(operation: FileOperationRecord, limit: number): Promise<RestorePreviewResult> {
+    if (!operation.recoverable) {
+      return {
+        operation,
+        totalEntries: operation.files.length,
+        directRestoreCount: 0,
+        moveCount: 0,
+        conflictCopyCount: 0,
+        skippedCount: 0,
+        unavailableCount: operation.files.length,
+        partial: true,
+        summary: "No recoverable snapshots are available for this operation.",
+        items: []
+      };
     }
 
-    if (!(await this.isRecoverableFileEntry(file))) {
-      result.failedCount += 1;
-      result.failureDetails.push(`Safe Exec only stored metadata for ${file.label}.`);
-      return result;
-    }
+    const orderedFiles = [...operation.files].sort(compareSnapshotRecords);
+    const items: RestorePreviewItem[] = [];
+    let directRestoreCount = 0;
+    let moveCount = 0;
+    let conflictCopyCount = 0;
+    let skippedCount = 0;
+    let unavailableCount = 0;
 
-    if (await pathExists(targetUri.fsPath)) {
-      result.skippedCount += 1;
-      result.warnings.push(`Skipped ${file.label} because the original path already exists.`);
-      return result;
-    }
+    for (const file of orderedFiles) {
+      const plan =
+        operation.kind === "delete"
+          ? await this.planDeletedEntryRestore(file)
+          : await this.planRenamedEntryRestore(file);
 
-    const content = await this.readSnapshotContent(file);
-    if (!content) {
-      result.failedCount += 1;
-      result.failureDetails.push(`Safe Exec could not load the snapshot for ${file.label}.`);
-      return result;
-    }
+      switch (plan.previewAction) {
+        case "restore":
+          directRestoreCount += 1;
+          break;
+        case "move":
+          moveCount += 1;
+          break;
+        case "conflict-copy":
+          conflictCopyCount += 1;
+          break;
+        case "skip":
+          skippedCount += 1;
+          break;
+        case "unavailable":
+          unavailableCount += 1;
+          break;
+      }
 
-    await fs.mkdir(path.dirname(targetUri.fsPath), { recursive: true });
-    await fs.writeFile(targetUri.fsPath, content);
-    result.restoredCount += 1;
-    return result;
-  }
-
-  private async restoreRenamedEntry(file: FileOperationSnapshotRecord): Promise<RestoreFileOperationResult> {
-    const result = emptyRestoreResult();
-    const oldUri = vscode.Uri.parse(file.originalUri);
-    const newUri = file.newUri ? vscode.Uri.parse(file.newUri) : undefined;
-
-    if (await pathExists(oldUri.fsPath)) {
-      result.skippedCount += 1;
-      result.warnings.push(`Skipped ${file.label} because the original path already exists.`);
-      return result;
-    }
-
-    if (file.isDirectory && newUri && (await pathExists(newUri.fsPath))) {
-      await fs.mkdir(path.dirname(oldUri.fsPath), { recursive: true });
-      await fs.rename(newUri.fsPath, oldUri.fsPath);
-      result.restoredCount += 1;
-      return result;
-    }
-
-    if (!newUri) {
-      result.failedCount += 1;
-      result.failureDetails.push(`Safe Exec does not know where ${file.label} was renamed to.`);
-      return result;
-    }
-
-    if (!(await this.isRecoverableFileEntry(file))) {
-      result.failedCount += 1;
-      result.failureDetails.push(`Safe Exec only stored metadata for ${file.label}.`);
-      return result;
-    }
-
-    const content = await this.readSnapshotContent(file);
-    if (!content) {
-      result.failedCount += 1;
-      result.failureDetails.push(`Safe Exec could not load the snapshot for ${file.label}.`);
-      return result;
-    }
-
-    if (await pathExists(newUri.fsPath)) {
-      const currentNewContent = await readFileIfExists(newUri.fsPath);
-      if (currentNewContent && buffersEqual(currentNewContent, content)) {
-        await fs.mkdir(path.dirname(oldUri.fsPath), { recursive: true });
-        await fs.rename(newUri.fsPath, oldUri.fsPath);
-        result.restoredCount += 1;
-        return result;
+      if (items.length < limit) {
+        items.push({
+          label: file.label,
+          action: plan.previewAction,
+          detail: plan.previewDetail
+        });
       }
     }
 
-    await fs.mkdir(path.dirname(oldUri.fsPath), { recursive: true });
-    await fs.writeFile(oldUri.fsPath, content);
-    result.restoredCount += 1;
-
-    if (await pathExists(newUri.fsPath)) {
-      result.warnings.push(`Restored ${file.label} from the snapshot and kept the renamed path because its current contents differ.`);
+    const partial = conflictCopyCount > 0 || skippedCount > 0 || unavailableCount > 0;
+    const summaryParts = [`${formatCount(directRestoreCount + moveCount, "entry")} ready to restore`];
+    if (conflictCopyCount > 0) {
+      summaryParts.push(`${formatCount(conflictCopyCount, "conflict copy")} will be created`);
     }
 
-    return result;
+    if (skippedCount > 0) {
+      summaryParts.push(`${formatCount(skippedCount, "entry")} already occupy the original path`);
+    }
+
+    if (unavailableCount > 0) {
+      summaryParts.push(`${formatCount(unavailableCount, "entry")} only have metadata`);
+    }
+
+    return {
+      operation,
+      totalEntries: operation.files.length,
+      directRestoreCount,
+      moveCount,
+      conflictCopyCount,
+      skippedCount,
+      unavailableCount,
+      partial,
+      summary: summaryParts.join("; "),
+      items
+    };
+  }
+
+  private async planDeletedEntryRestore(file: FileOperationSnapshotRecord): Promise<RestorePlan> {
+    const targetUri = vscode.Uri.parse(file.originalUri);
+    const targetPath = targetUri.fsPath;
+
+    if (file.isDirectory) {
+      const existing = await this.getExistingPathState(targetPath);
+      if (existing.exists) {
+        return {
+          action: "skip",
+          warning: `${file.label} already exists at the original path.`,
+          previewAction: "skip",
+          previewDetail: `Keep the existing directory at ${this.displayPath(targetPath)}.`
+        };
+      }
+
+      return {
+        action: "mkdir",
+        targetPath,
+        previewAction: "restore",
+        previewDetail: `Recreate the directory at ${this.displayPath(targetPath)}.`
+      };
+    }
+
+    const snapshotContent = await this.loadRecoverableSnapshot(file);
+    if (!snapshotContent.content) {
+      return {
+        action: "fail",
+        failure: snapshotContent.failure,
+        previewAction: "unavailable",
+        previewDetail: snapshotContent.failure ?? `Safe Exec cannot restore ${file.label}.`
+      };
+    }
+
+    const existing = await this.getExistingPathState(targetPath);
+    if (!existing.exists) {
+      return {
+        action: "write",
+        targetPath,
+        content: snapshotContent.content,
+        previewAction: "restore",
+        previewDetail: `Restore the snapshot to ${this.displayPath(targetPath)}.`
+      };
+    }
+
+    if (existing.content && buffersEqual(existing.content, snapshotContent.content)) {
+      return {
+        action: "skip",
+        warning: `${file.label} already matches the stored snapshot at the original path.`,
+        previewAction: "skip",
+        previewDetail: `${this.displayPath(targetPath)} already matches the stored snapshot.`
+      };
+    }
+
+    const conflictPath = await this.nextConflictPath(targetPath, file.isDirectory);
+    return {
+      action: "write-conflict-copy",
+      targetPath: conflictPath,
+      content: snapshotContent.content,
+      warning: `Restored ${file.label} to ${this.displayPath(conflictPath)} because the original path already exists.`,
+      previewAction: "conflict-copy",
+      previewDetail: `Restore a conflict copy to ${this.displayPath(conflictPath)} because ${this.displayPath(targetPath)} already exists.`
+    };
+  }
+
+  private async planRenamedEntryRestore(file: FileOperationSnapshotRecord): Promise<RestorePlan> {
+    const oldUri = vscode.Uri.parse(file.originalUri);
+    const newUri = file.newUri ? vscode.Uri.parse(file.newUri) : undefined;
+    const oldPath = oldUri.fsPath;
+    const newPath = newUri?.fsPath;
+
+    if (!newPath) {
+      return {
+        action: "fail",
+        failure: `Safe Exec does not know where ${file.label} was renamed to.`,
+        previewAction: "unavailable",
+        previewDetail: `Safe Exec does not know where ${file.label} was renamed to.`
+      };
+    }
+
+    const oldState = await this.getExistingPathState(oldPath);
+    const newState = await this.getExistingPathState(newPath);
+
+    if (file.isDirectory) {
+      if (oldState.exists) {
+        return {
+          action: "skip",
+          warning: `${file.label} already exists at the original path.`,
+          previewAction: "skip",
+          previewDetail: `Keep the existing directory at ${this.displayPath(oldPath)}.`
+        };
+      }
+
+      if (newState.exists) {
+        return {
+          action: "move",
+          sourcePath: newPath,
+          targetPath: oldPath,
+          previewAction: "move",
+          previewDetail: `Move the renamed directory from ${this.displayPath(newPath)} back to ${this.displayPath(oldPath)}.`
+        };
+      }
+
+      return {
+        action: "mkdir",
+        targetPath: oldPath,
+        previewAction: "restore",
+        previewDetail: `Recreate the original directory at ${this.displayPath(oldPath)}.`
+      };
+    }
+
+    const snapshotContent = await this.loadRecoverableSnapshot(file);
+    if (!snapshotContent.content) {
+      return {
+        action: "fail",
+        failure: snapshotContent.failure,
+        previewAction: "unavailable",
+        previewDetail: snapshotContent.failure ?? `Safe Exec cannot restore ${file.label}.`
+      };
+    }
+
+    if (oldState.content && buffersEqual(oldState.content, snapshotContent.content)) {
+      return {
+        action: "skip",
+        warning: `${file.label} already matches the stored snapshot at the original path.`,
+        previewAction: "skip",
+        previewDetail: `${this.displayPath(oldPath)} already matches the stored snapshot.`
+      };
+    }
+
+    if (oldState.exists) {
+      const conflictPath = await this.nextConflictPath(oldPath, file.isDirectory);
+      return {
+        action: "write-conflict-copy",
+        targetPath: conflictPath,
+        content: snapshotContent.content,
+        warning: `Restored ${file.label} to ${this.displayPath(conflictPath)} because the original path already exists.`,
+        previewAction: "conflict-copy",
+        previewDetail: `Restore a conflict copy to ${this.displayPath(conflictPath)} because ${this.displayPath(oldPath)} already exists.`
+      };
+    }
+
+    if (newState.content && buffersEqual(newState.content, snapshotContent.content)) {
+      return {
+        action: "move",
+        sourcePath: newPath,
+        targetPath: oldPath,
+        previewAction: "move",
+        previewDetail: `Move the renamed file from ${this.displayPath(newPath)} back to ${this.displayPath(oldPath)}.`
+      };
+    }
+
+    const warning = newState.exists
+      ? `Restored ${file.label} from the snapshot and kept ${this.displayPath(newPath)} because its current contents differ.`
+      : undefined;
+    const previewDetail = newState.exists
+      ? `Restore the snapshot to ${this.displayPath(oldPath)} and keep ${this.displayPath(newPath)} because its current contents differ.`
+      : `Restore the snapshot to ${this.displayPath(oldPath)}.`;
+
+    return {
+      action: "write",
+      targetPath: oldPath,
+      content: snapshotContent.content,
+      warning,
+      previewAction: "restore",
+      previewDetail
+    };
+  }
+
+  private async executeRestorePlan(file: FileOperationSnapshotRecord, plan: RestorePlan): Promise<RestoreFileOperationResult> {
+    const result = emptyRestoreResult();
+
+    if (plan.warning) {
+      result.warnings.push(plan.warning);
+    }
+
+    if (plan.action === "skip") {
+      result.skippedCount += 1;
+      return result;
+    }
+
+    if (plan.action === "fail") {
+      result.failedCount += 1;
+      result.failureDetails.push(plan.failure ?? `Safe Exec could not restore ${file.label}.`);
+      return result;
+    }
+
+    try {
+      switch (plan.action) {
+        case "mkdir":
+          if (!plan.targetPath) {
+            throw new Error("Missing target path for directory restore.");
+          }
+          await fs.mkdir(plan.targetPath, { recursive: true });
+          result.restoredCount += 1;
+          return result;
+        case "write":
+        case "write-conflict-copy":
+          if (!plan.targetPath || !plan.content) {
+            throw new Error("Missing target path or content for file restore.");
+          }
+          await fs.mkdir(path.dirname(plan.targetPath), { recursive: true });
+          await fs.writeFile(plan.targetPath, plan.content);
+          result.restoredCount += 1;
+          return result;
+        case "move":
+          if (!plan.sourcePath || !plan.targetPath) {
+            throw new Error("Missing source or target path for rename restore.");
+          }
+          await fs.mkdir(path.dirname(plan.targetPath), { recursive: true });
+          await fs.rename(plan.sourcePath, plan.targetPath);
+          result.restoredCount += 1;
+          return result;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      result.failedCount += 1;
+      result.failureDetails.push(`Safe Exec could not restore ${file.label}: ${message}`);
+      return result;
+    }
+  }
+
+  private async loadRecoverableSnapshot(
+    file: FileOperationSnapshotRecord
+  ): Promise<{ content?: Buffer; failure?: string }> {
+    if (!(await this.isRecoverableFileEntry(file))) {
+      return {
+        failure: `Safe Exec only stored metadata for ${file.label}.`
+      };
+    }
+
+    const content = await this.readSnapshotContent(file);
+    if (!content) {
+      return {
+        failure: `Safe Exec could not load the snapshot for ${file.label}.`
+      };
+    }
+
+    return { content };
   }
 
   private async isRecoverableFileEntry(file: FileOperationSnapshotRecord): Promise<boolean> {
@@ -484,7 +820,13 @@ export class FileOperationRecoveryStore {
     }
 
     try {
-      return await fs.readFile(path.join(this.rootUri.fsPath, file.snapshotStoragePath));
+      const snapshotPath = path.join(this.rootUri.fsPath, file.snapshotStoragePath);
+      const storedContent = await fs.readFile(snapshotPath);
+      if ((file.snapshotCompression ?? "none") === "gzip") {
+        return Buffer.from(await gunzipAsync(storedContent));
+      }
+
+      return storedContent;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.output.appendLine(`[file-store] Failed to read snapshot for ${file.label}: ${message}`);
@@ -492,21 +834,186 @@ export class FileOperationRecoveryStore {
     }
   }
 
+  private async storeSnapshotContent(snapshotKind: FileSnapshotKind, content: Buffer): Promise<StoredSnapshotContent> {
+    const contentHash = hashBuffer(content);
+    let storedContent = content;
+    let compression: SnapshotCompression = "none";
+
+    if (snapshotKind === "text" && content.byteLength >= TEXT_COMPRESSION_MIN_BYTES) {
+      const compressed = Buffer.from(await gzipAsync(content));
+      if (compressed.byteLength + TEXT_COMPRESSION_MIN_SAVINGS_BYTES < content.byteLength) {
+        storedContent = compressed;
+        compression = "gzip";
+      }
+    }
+
+    const storagePath = this.buildBlobStoragePath(contentHash, snapshotKind, compression);
+    const absoluteStoragePath = path.join(this.rootUri.fsPath, storagePath);
+    await fs.mkdir(path.dirname(absoluteStoragePath), { recursive: true });
+    if (!(await pathExists(absoluteStoragePath))) {
+      await fs.writeFile(absoluteStoragePath, storedContent);
+    }
+
+    return {
+      contentHash,
+      compression,
+      storagePath,
+      storedBytes: storedContent.byteLength
+    };
+  }
+
+  private buildBlobStoragePath(contentHash: string, snapshotKind: FileSnapshotKind, compression: SnapshotCompression): string {
+    const directory = path.join("snapshots", BLOB_DIRECTORY_NAME, contentHash.slice(0, 2));
+    const suffix =
+      compression === "gzip" ? ".txt.gz" : snapshotKind === "binary" ? ".bin" : snapshotKind === "text" ? ".txt" : ".blob";
+    return path.join(directory, `${contentHash}${suffix}`);
+  }
+
   private async pruneIndex(indexData: FileOperationIndex): Promise<void> {
     const sorted = [...indexData.operations].sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
 
-    let totalSnapshotBytes = sorted.reduce((total, operation) => total + operation.snapshotBytesCaptured, 0);
-    while (sorted.length > MAX_STORED_OPERATIONS || totalSnapshotBytes > MAX_TOTAL_SNAPSHOT_BYTES) {
+    while (sorted.length > MAX_STORED_OPERATIONS || (await this.computeReferencedSnapshotBytes(sorted)) > MAX_TOTAL_SNAPSHOT_BYTES) {
       const oldest = sorted.shift();
       if (!oldest) {
         break;
       }
-
-      totalSnapshotBytes -= oldest.snapshotBytesCaptured;
-      await fs.rm(path.join(this.snapshotRootPath, oldest.id), { recursive: true, force: true });
     }
 
     indexData.operations = sorted;
+    await this.cleanupUnreferencedSnapshotFiles(sorted);
+  }
+
+  private async computeReferencedSnapshotBytes(operations: readonly FileOperationRecord[]): Promise<number> {
+    const referencedPaths = collectReferencedSnapshotPaths(operations);
+    let totalBytes = 0;
+
+    for (const relativePath of referencedPaths) {
+      const file = operations
+        .flatMap((operation) => operation.files)
+        .find((entry) => entry.snapshotStoragePath === relativePath);
+      if (file?.snapshotStoredBytes !== undefined) {
+        totalBytes += file.snapshotStoredBytes;
+        continue;
+      }
+
+      try {
+        const stat = await fs.stat(path.join(this.rootUri.fsPath, relativePath));
+        totalBytes += stat.size;
+      } catch (error) {
+        const nodeError = error as NodeJS.ErrnoException;
+        if (nodeError.code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+
+    return totalBytes;
+  }
+
+  private async cleanupUnreferencedSnapshotFiles(operations: readonly FileOperationRecord[]): Promise<void> {
+    const referencedPaths = collectReferencedSnapshotPaths(operations);
+    await fs.mkdir(this.snapshotRootPath, { recursive: true });
+    await fs.mkdir(this.blobRootPath, { recursive: true });
+    await this.removeUnreferencedEntries(this.snapshotRootPath, referencedPaths);
+  }
+
+  private async removeUnreferencedEntries(currentPath: string, referencedPaths: ReadonlySet<string>): Promise<boolean> {
+    let entries;
+    try {
+      entries = await fs.readdir(currentPath, { withFileTypes: true });
+    } catch (error) {
+      const nodeError = error as NodeJS.ErrnoException;
+      if (nodeError.code === "ENOENT") {
+        return false;
+      }
+
+      throw error;
+    }
+
+    let hasReferencedChildren = false;
+    for (const entry of entries) {
+      const absolutePath = path.join(currentPath, entry.name);
+      const relativePath = path.relative(this.rootUri.fsPath, absolutePath);
+
+      if (entry.isDirectory()) {
+        const keepDirectory = await this.removeUnreferencedEntries(absolutePath, referencedPaths);
+        hasReferencedChildren = hasReferencedChildren || keepDirectory;
+        if (!keepDirectory) {
+          await fs.rm(absolutePath, { recursive: true, force: true });
+        }
+        continue;
+      }
+
+      if (referencedPaths.has(relativePath)) {
+        hasReferencedChildren = true;
+        continue;
+      }
+
+      await fs.rm(absolutePath, { force: true });
+    }
+
+    if (currentPath === this.snapshotRootPath || currentPath === this.blobRootPath) {
+      return true;
+    }
+
+    return hasReferencedChildren;
+  }
+
+  private async getExistingPathState(targetPath: string): Promise<ExistingPathState> {
+    try {
+      const stat = await fs.lstat(targetPath);
+      if (stat.isDirectory()) {
+        return {
+          exists: true,
+          isDirectory: true
+        };
+      }
+
+      return {
+        exists: true,
+        isDirectory: false,
+        content: await fs.readFile(targetPath)
+      };
+    } catch (error) {
+      const nodeError = error as NodeJS.ErrnoException;
+      if (nodeError.code === "ENOENT") {
+        return {
+          exists: false,
+          isDirectory: false
+        };
+      }
+
+      if (nodeError.code === "EISDIR") {
+        return {
+          exists: true,
+          isDirectory: true
+        };
+      }
+
+      throw error;
+    }
+  }
+
+  private async nextConflictPath(targetPath: string, isDirectory: boolean): Promise<string> {
+    const parsed = path.parse(targetPath);
+    const baseName = isDirectory ? `${parsed.base}${RESTORE_CONFLICT_SUFFIX}` : `${parsed.name}${RESTORE_CONFLICT_SUFFIX}${parsed.ext}`;
+    let candidatePath = path.join(parsed.dir, baseName);
+    let counter = 2;
+
+    while (await pathExists(candidatePath)) {
+      const counterName = isDirectory
+        ? `${parsed.base}${RESTORE_CONFLICT_SUFFIX}-${counter}`
+        : `${parsed.name}${RESTORE_CONFLICT_SUFFIX}-${counter}${parsed.ext}`;
+      candidatePath = path.join(parsed.dir, counterName);
+      counter += 1;
+    }
+
+    return candidatePath;
+  }
+
+  private displayPath(targetPath: string): string {
+    const uri = vscode.Uri.file(targetPath);
+    return vscode.workspace.asRelativePath(uri, false) || targetPath;
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -514,7 +1021,7 @@ export class FileOperationRecoveryStore {
       return;
     }
 
-    await fs.mkdir(this.snapshotRootPath, { recursive: true });
+    await fs.mkdir(this.blobRootPath, { recursive: true });
     await this.loadIndex();
   }
 
@@ -525,10 +1032,7 @@ export class FileOperationRecoveryStore {
 
     try {
       const raw = await fs.readFile(this.indexPath, "utf8");
-      this.indexCache = JSON.parse(raw) as FileOperationIndex;
-      if (!this.indexCache || !Array.isArray(this.indexCache.operations)) {
-        throw new Error("Malformed file operation index.");
-      }
+      this.indexCache = normalizeIndex(JSON.parse(raw));
       return this.indexCache;
     } catch (error) {
       const nodeError = error as NodeJS.ErrnoException;
@@ -538,7 +1042,7 @@ export class FileOperationRecoveryStore {
       }
 
       this.indexCache = {
-        version: 1,
+        version: 2,
         operations: []
       };
       await this.persistIndex(this.indexCache);
@@ -560,6 +1064,85 @@ export class FileOperationRecoveryStore {
     );
     return run;
   }
+}
+
+function normalizeIndex(raw: unknown): FileOperationIndex {
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { operations?: unknown[] }).operations)) {
+    throw new Error("Malformed file operation index.");
+  }
+
+  const index = raw as { operations: unknown[] };
+  return {
+    version: 2,
+    operations: index.operations.map((operation) => normalizeOperationRecord(operation))
+  };
+}
+
+function normalizeOperationRecord(operation: unknown): FileOperationRecord {
+  if (!operation || typeof operation !== "object") {
+    throw new Error("Malformed file operation record.");
+  }
+
+  const record = operation as Partial<FileOperationRecord>;
+  const files = Array.isArray(record.files) ? record.files.map((file) => normalizeSnapshotRecord(file)) : [];
+
+  return {
+    id: typeof record.id === "string" ? record.id : createOperationId(),
+    kind: isFileOperationKind(record.kind) ? record.kind : "delete",
+    risk: isRiskLevel(record.risk) ? record.risk : "medium",
+    summary: typeof record.summary === "string" ? record.summary : "File operation",
+    detail: typeof record.detail === "string" ? record.detail : undefined,
+    recordedAt: typeof record.recordedAt === "string" ? record.recordedAt : new Date().toISOString(),
+    completedAt: typeof record.completedAt === "string" ? record.completedAt : undefined,
+    restoredAt: typeof record.restoredAt === "string" ? record.restoredAt : undefined,
+    status: isFileOperationStatus(record.status) ? record.status : "pending",
+    fileCount: typeof record.fileCount === "number" ? record.fileCount : files.filter((file) => !file.isDirectory).length,
+    protectedCount: typeof record.protectedCount === "number" ? record.protectedCount : 0,
+    bulk: Boolean(record.bulk),
+    subtree: Boolean(record.subtree),
+    recoverable: typeof record.recoverable === "boolean" ? record.recoverable : files.some((file) => isRecoverableSnapshot(file)),
+    snapshotCount:
+      typeof record.snapshotCount === "number"
+        ? record.snapshotCount
+        : files.filter((file) => file.snapshotStoragePath).length,
+    metadataOnlyCount:
+      typeof record.metadataOnlyCount === "number"
+        ? record.metadataOnlyCount
+        : files.filter((file) => file.snapshotKind === "metadata-only" && !file.isDirectory).length,
+    unrecoverableCount:
+      typeof record.unrecoverableCount === "number"
+        ? record.unrecoverableCount
+        : files.filter((file) => file.snapshotKind === "none" && !file.isDirectory).length,
+    snapshotBytesCaptured:
+      typeof record.snapshotBytesCaptured === "number"
+        ? record.snapshotBytesCaptured
+        : files.reduce((total, file) => total + (file.snapshotStoredBytes ?? 0), 0),
+    bestEffortNote: typeof record.bestEffortNote === "string" ? record.bestEffortNote : undefined,
+    files
+  };
+}
+
+function normalizeSnapshotRecord(file: unknown): FileOperationSnapshotRecord {
+  if (!file || typeof file !== "object") {
+    throw new Error("Malformed file operation snapshot record.");
+  }
+
+  const record = file as Partial<FileOperationSnapshotRecord>;
+  return {
+    entryId: typeof record.entryId === "string" ? record.entryId : "1",
+    label: typeof record.label === "string" ? record.label : "entry",
+    originalUri: typeof record.originalUri === "string" ? record.originalUri : "",
+    newUri: typeof record.newUri === "string" ? record.newUri : undefined,
+    isDirectory: Boolean(record.isDirectory),
+    size: typeof record.size === "number" ? record.size : undefined,
+    subtreeFileCount: typeof record.subtreeFileCount === "number" ? record.subtreeFileCount : undefined,
+    snapshotKind: isFileSnapshotKind(record.snapshotKind) ? record.snapshotKind : "none",
+    snapshotStoragePath: typeof record.snapshotStoragePath === "string" ? record.snapshotStoragePath : undefined,
+    snapshotContentHash: typeof record.snapshotContentHash === "string" ? record.snapshotContentHash : undefined,
+    snapshotCompression: record.snapshotCompression === "gzip" ? "gzip" : "none",
+    snapshotStoredBytes: typeof record.snapshotStoredBytes === "number" ? record.snapshotStoredBytes : undefined,
+    detail: typeof record.detail === "string" ? record.detail : undefined
+  };
 }
 
 function createOperationId(): string {
@@ -592,25 +1175,25 @@ function isRecoverableSnapshot(file: FileOperationSnapshotRecord): boolean {
   return file.isDirectory || file.snapshotKind === "text" || file.snapshotKind === "binary";
 }
 
+function collectReferencedSnapshotPaths(operations: readonly FileOperationRecord[]): ReadonlySet<string> {
+  const referencedPaths = new Set<string>();
+  for (const operation of operations) {
+    for (const file of operation.files) {
+      if (file.snapshotStoragePath) {
+        referencedPaths.add(file.snapshotStoragePath);
+      }
+    }
+  }
+
+  return referencedPaths;
+}
+
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
     await fs.access(targetPath);
     return true;
   } catch {
     return false;
-  }
-}
-
-async function readFileIfExists(targetPath: string): Promise<Buffer | undefined> {
-  try {
-    return await fs.readFile(targetPath);
-  } catch (error) {
-    const nodeError = error as NodeJS.ErrnoException;
-    if (nodeError.code === "ENOENT") {
-      return undefined;
-    }
-
-    throw error;
   }
 }
 
@@ -626,4 +1209,46 @@ function buffersEqual(left: Uint8Array, right: Uint8Array): boolean {
   }
 
   return true;
+}
+
+function hashBuffer(content: Uint8Array): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function formatSnapshotListEntry(file: FileOperationSnapshotRecord): string {
+  if (file.isDirectory) {
+    const subtreeSuffix =
+      typeof file.subtreeFileCount === "number" ? `, ${formatCount(file.subtreeFileCount, "file")} in subtree` : "";
+    return `${file.label} (directory${subtreeSuffix})`;
+  }
+
+  const snapshotLabel =
+    file.snapshotKind === "none"
+      ? "observed only"
+      : file.snapshotKind === "metadata-only"
+      ? "metadata only"
+      : file.snapshotCompression === "gzip"
+      ? `${file.snapshotKind}, compressed`
+      : file.snapshotKind;
+  return `${file.label} (${snapshotLabel})`;
+}
+
+function formatCount(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function isFileOperationKind(value: unknown): value is FileOperationKind {
+  return value === "create" || value === "delete" || value === "rename";
+}
+
+function isFileOperationStatus(value: unknown): value is FileOperationStatus {
+  return value === "pending" || value === "completed" || value === "denied" || value === "restored" || value === "restore-failed";
+}
+
+function isFileSnapshotKind(value: unknown): value is FileSnapshotKind {
+  return value === "text" || value === "binary" || value === "metadata-only" || value === "none";
+}
+
+function isRiskLevel(value: unknown): value is RiskLevel {
+  return value === "low" || value === "medium" || value === "high" || value === "critical";
 }

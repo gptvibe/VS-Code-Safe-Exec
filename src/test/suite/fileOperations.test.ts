@@ -1,8 +1,10 @@
 import * as assert from "assert/strict";
+import * as fs from "fs/promises";
 import * as vscode from "vscode";
 import {
   activateExtension,
   fixtureExists,
+  getFixturePath,
   getFixtureUri,
   readFixtureFile,
   resetTestState,
@@ -84,6 +86,25 @@ suite("file operation interception", () => {
     assert.equal(await readFixtureFile("sample.ts"), originalText);
   });
 
+  test("restoring a deleted binary file works", async () => {
+    const api = await activateExtension();
+    await resetTestState(api);
+
+    const originalBytes = Buffer.from([0, 1, 2, 3, 255, 10, 13, 64]);
+    await writeFixtureFile("binary.dat", originalBytes);
+    const binaryUri = getFixtureUri("binary.dat");
+    await deleteFiles([binaryUri]);
+
+    await waitFor(async () => !(await fixtureExists("binary.dat")));
+    await waitForAuditEvent(api, "file", "snapshot-created", (event) => event.summary.includes("binary.dat"));
+
+    await vscode.commands.executeCommand("safeExec.restoreLastRecoverableFileOperation");
+    await waitFor(async () => await fixtureExists("binary.dat"));
+
+    const restoredBytes = await fs.readFile(getFixturePath("binary.dat"));
+    assert.deepEqual(restoredBytes, originalBytes);
+  });
+
   test("oversized file falls back to metadata-only behavior", async () => {
     const api = await activateExtension();
     await resetTestState(api);
@@ -98,6 +119,29 @@ suite("file operation interception", () => {
 
     assert.equal(metadataOnly.metadata?.metadataOnlyCount, 1);
     assert.equal(unrecoverable.metadata?.operationId !== undefined, true);
+  });
+
+  test("partial restore recovers available files from a mixed subtree", async () => {
+    const api = await activateExtension();
+    await resetTestState(api);
+
+    await writeFixtureFile("mixed-tree/small.txt", "restorable\n");
+    await writeFixtureFile("mixed-tree/large.txt", "x".repeat(300000));
+    const treeUri = getFixtureUri("mixed-tree");
+    await deleteFiles([treeUri]);
+
+    await waitFor(async () => !(await fixtureExists("mixed-tree")));
+    const deleted = await waitForAuditEvent(api, "file", "delete", (event) => event.summary.includes("mixed-tree"));
+    assert.match(deleted.summary, /mixed-tree subtree \(2 file\(s\)\)/);
+
+    await vscode.commands.executeCommand("safeExec.restoreLastRecoverableFileOperation");
+    await waitFor(async () => await fixtureExists("mixed-tree/small.txt"));
+    const restored = await waitForAuditEvent(api, "file", "restored", (event) => event.summary.includes("mixed-tree"));
+
+    assert.equal(await readFixtureFile("mixed-tree/small.txt"), "restorable\n");
+    assert.equal(await fixtureExists("mixed-tree/large.txt"), false);
+    assert.equal(restored.metadata?.restoredCount, 2);
+    assert.equal(restored.metadata?.failedCount, 1);
   });
 
   test("bulk delete is classified at higher risk", async () => {

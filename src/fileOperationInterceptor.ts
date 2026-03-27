@@ -8,7 +8,8 @@ import type {
   FileOperationRecord,
   FileOperationRecordInput,
   FileOperationRecoveryStore,
-  FileOperationSnapshotInput
+  FileOperationSnapshotInput,
+  RestorePreviewResult
 } from "./fileOperationRecoveryStore";
 import { matchesAnyCompiledRegexPattern, matchesSensitivePath } from "./rules";
 import type { CompiledRules, RiskLevel } from "./rules";
@@ -106,11 +107,20 @@ export class FileOperationInterceptor {
       return;
     }
 
+    const previews = new Map<string, RestorePreviewResult>();
+    await Promise.all(
+      operations.map(async (operation) => {
+        previews.set(operation.id, await this.options.recoveryStore.previewRestoreOperation(operation.id, 4));
+      })
+    );
+
     const selection = await vscode.window.showQuickPick(
       operations.map((operation) => ({
         label: `${operation.kind}: ${operation.summary}`,
-        description: `${operation.risk.toUpperCase()} · ${operation.snapshotCount} snapshot(s)`,
-        detail: operation.bestEffortNote ?? operation.detail,
+        description: `${operation.risk.toUpperCase()} · ${operation.snapshotCount} snapshot(s)${
+          previews.get(operation.id)?.partial ? " · partial restore" : ""
+        }`,
+        detail: [previews.get(operation.id)?.summary, operation.bestEffortNote ?? operation.detail].filter(Boolean).join(" · "),
         operation
       })),
       {
@@ -388,19 +398,30 @@ export class FileOperationInterceptor {
   private async prepareDeleteOperation(files: readonly vscode.Uri[]): Promise<PreparedFileOperation> {
     const rules = this.options.getRules().fileOps;
     const snapshots: OperationEntryEvaluation[] = [];
+    const rootSnapshots: OperationEntryEvaluation[] = [];
     let operationFileCount = 0;
     let truncated = false;
 
     for (const uri of files) {
       const rootEntry = await this.collectExistingEntry(uri);
       if (!rootEntry) {
-        snapshots.push(this.buildObservedOnlySnapshot(uri, "Path did not exist when Safe Exec evaluated the delete request."));
+        const observedOnly = this.buildObservedOnlySnapshot(uri, "Path did not exist when Safe Exec evaluated the delete request.");
+        snapshots.push(observedOnly);
+        rootSnapshots.push(observedOnly);
         continue;
       }
 
       snapshots.push(rootEntry);
+      rootSnapshots.push(rootEntry);
       if (rootEntry.snapshot.isDirectory) {
         const walk = await this.collectDirectoryEntries(uri, undefined, rules.maxFilesPerOperation, rules.minBulkOperationCount);
+        rootEntry.snapshot.subtreeFileCount = walk.fileCount;
+        if (walk.truncated) {
+          rootEntry.snapshot.detail = this.appendSnapshotDetail(
+            rootEntry.snapshot.detail,
+            `Safe Exec observed at least ${walk.fileCount} file(s) in this subtree before the snapshot cap was reached.`
+          );
+        }
         snapshots.push(...walk.entries);
         operationFileCount += walk.fileCount;
         truncated = truncated || walk.truncated;
@@ -410,11 +431,13 @@ export class FileOperationInterceptor {
     }
 
     const evaluation = this.evaluateOperation("delete", snapshots);
+    const summary = this.describeDeleteSummary(files, rootSnapshots, operationFileCount, truncated);
     const detail = this.buildOperationDetail(
       evaluation,
       truncated
         ? `Safe Exec capped preflight snapshotting at ${rules.maxFilesPerOperation} file(s) for this operation.`
-        : "Recoverable snapshots were captured when the file size, file count, and type limits allowed it."
+        : "Recoverable snapshots were captured when the file size, file count, and type limits allowed it.",
+      this.buildDeleteScopeDetail(files, rootSnapshots, operationFileCount, truncated)
     );
 
     return {
@@ -422,7 +445,7 @@ export class FileOperationInterceptor {
       record: {
         kind: "delete",
         risk: evaluation.risk,
-        summary: this.describeCreateDelete(files, "delete"),
+        summary,
         detail,
         fileCount: Math.max(operationFileCount, evaluation.fileCount),
         protectedCount: evaluation.protectedCount,
@@ -437,19 +460,34 @@ export class FileOperationInterceptor {
   private async prepareRenameOperation(files: readonly { oldUri: vscode.Uri; newUri: vscode.Uri }[]): Promise<PreparedFileOperation> {
     const rules = this.options.getRules().fileOps;
     const snapshots: OperationEntryEvaluation[] = [];
+    const rootSnapshots: OperationEntryEvaluation[] = [];
     let operationFileCount = 0;
     let truncated = false;
 
     for (const pair of files) {
       const rootEntry = await this.collectExistingEntry(pair.oldUri, pair.newUri);
       if (!rootEntry) {
-        snapshots.push(this.buildObservedOnlySnapshot(pair.oldUri, "Path did not exist when Safe Exec evaluated the rename request.", pair.newUri));
+        const observedOnly = this.buildObservedOnlySnapshot(
+          pair.oldUri,
+          "Path did not exist when Safe Exec evaluated the rename request.",
+          pair.newUri
+        );
+        snapshots.push(observedOnly);
+        rootSnapshots.push(observedOnly);
         continue;
       }
 
       snapshots.push(rootEntry);
+      rootSnapshots.push(rootEntry);
       if (rootEntry.snapshot.isDirectory) {
         const walk = await this.collectDirectoryEntries(pair.oldUri, pair.newUri, rules.maxFilesPerOperation, rules.minBulkOperationCount);
+        rootEntry.snapshot.subtreeFileCount = walk.fileCount;
+        if (walk.truncated) {
+          rootEntry.snapshot.detail = this.appendSnapshotDetail(
+            rootEntry.snapshot.detail,
+            `Safe Exec observed at least ${walk.fileCount} file(s) in this subtree before the snapshot cap was reached.`
+          );
+        }
         snapshots.push(...walk.entries);
         operationFileCount += walk.fileCount;
         truncated = truncated || walk.truncated;
@@ -459,11 +497,13 @@ export class FileOperationInterceptor {
     }
 
     const evaluation = this.evaluateOperation("rename", snapshots);
+    const summary = this.describeRenameSummary(files, rootSnapshots, operationFileCount, truncated);
     const detail = this.buildOperationDetail(
       evaluation,
       truncated
         ? `Safe Exec capped preflight snapshotting at ${rules.maxFilesPerOperation} file(s) for this rename operation.`
-        : "Recoverable snapshots were captured when the file size, file count, and type limits allowed it."
+        : "Recoverable snapshots were captured when the file size, file count, and type limits allowed it.",
+      this.buildRenameScopeDetail(files, rootSnapshots, operationFileCount, truncated)
     );
 
     return {
@@ -471,7 +511,7 @@ export class FileOperationInterceptor {
       record: {
         kind: "rename",
         risk: evaluation.risk,
-        summary: this.describeRename(files),
+        summary,
         detail,
         fileCount: Math.max(operationFileCount, evaluation.fileCount),
         protectedCount: evaluation.protectedCount,
@@ -770,12 +810,120 @@ export class FileOperationInterceptor {
     return kind === "create" ? "low" : "medium";
   }
 
-  private buildOperationDetail(evaluation: OperationEvaluationSummary, limitation: string): string {
+  private buildOperationDetail(evaluation: OperationEvaluationSummary, limitation: string, scope?: string): string {
     return [
       `Reasons: ${evaluation.reasons.join("; ")}`,
+      scope ? `Scope: ${scope}` : undefined,
       limitation,
       COVERAGE_NOTE
-    ].join("\n");
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n");
+  }
+
+  private describeDeleteSummary(
+    files: readonly vscode.Uri[],
+    roots: readonly OperationEntryEvaluation[],
+    fileCount: number,
+    truncated: boolean
+  ): string {
+    if (files.length === 1) {
+      const root = roots[0];
+      if (root?.snapshot.isDirectory) {
+        return `Delete ${this.describeUri(files[0])} subtree (${this.formatObservedFileCount(fileCount, truncated)})`;
+      }
+
+      return this.describeCreateDelete(files, "delete");
+    }
+
+    if (roots.some((root) => root.snapshot.isDirectory)) {
+      return `Delete ${files.length} path(s) across ${this.summarizeRoots(files.map((uri) => this.describeUri(uri)))} (${this.formatObservedFileCount(
+        fileCount,
+        truncated
+      )})`;
+    }
+
+    return this.describeCreateDelete(files, "delete");
+  }
+
+  private describeRenameSummary(
+    files: readonly { oldUri: vscode.Uri; newUri: vscode.Uri }[],
+    roots: readonly OperationEntryEvaluation[],
+    fileCount: number,
+    truncated: boolean
+  ): string {
+    if (files.length === 1) {
+      const root = roots[0];
+      if (root?.snapshot.isDirectory) {
+        return `Rename ${this.describeUri(files[0].oldUri)} -> ${this.describeUri(files[0].newUri)} (${this.formatObservedFileCount(
+          fileCount,
+          truncated
+        )} in subtree)`;
+      }
+
+      return this.describeRename(files);
+    }
+
+    if (roots.some((root) => root.snapshot.isDirectory)) {
+      return `Rename ${files.length} path(s) across ${this.summarizeRoots(
+        files.map((entry) => `${this.describeUri(entry.oldUri)} -> ${this.describeUri(entry.newUri)}`)
+      )} (${this.formatObservedFileCount(fileCount, truncated)})`;
+    }
+
+    return this.describeRename(files);
+  }
+
+  private buildDeleteScopeDetail(
+    files: readonly vscode.Uri[],
+    roots: readonly OperationEntryEvaluation[],
+    fileCount: number,
+    truncated: boolean
+  ): string {
+    if (roots.some((root) => root.snapshot.isDirectory)) {
+      return `${this.summarizeRoots(files.map((uri) => this.describeUri(uri)))}; ${this.formatObservedFileCount(fileCount, truncated)} across the observed tree.`;
+    }
+
+    return `${this.summarizeRoots(files.map((uri) => this.describeUri(uri)))}.`;
+  }
+
+  private buildRenameScopeDetail(
+    files: readonly { oldUri: vscode.Uri; newUri: vscode.Uri }[],
+    roots: readonly OperationEntryEvaluation[],
+    fileCount: number,
+    truncated: boolean
+  ): string {
+    if (roots.some((root) => root.snapshot.isDirectory)) {
+      return `${this.summarizeRoots(files.map((entry) => `${this.describeUri(entry.oldUri)} -> ${this.describeUri(entry.newUri)}`))}; ${this.formatObservedFileCount(
+        fileCount,
+        truncated
+      )} across the observed tree.`;
+    }
+
+    return `${this.summarizeRoots(files.map((entry) => `${this.describeUri(entry.oldUri)} -> ${this.describeUri(entry.newUri)}`))}.`;
+  }
+
+  private summarizeRoots(labels: readonly string[]): string {
+    if (labels.length === 0) {
+      return "no paths";
+    }
+
+    if (labels.length === 1) {
+      return labels[0];
+    }
+
+    if (labels.length === 2) {
+      return `${labels[0]} and ${labels[1]}`;
+    }
+
+    return `${labels[0]}, ${labels[1]}, and ${labels.length - 2} more root(s)`;
+  }
+
+  private formatObservedFileCount(fileCount: number, truncated: boolean): string {
+    return truncated ? `at least ${fileCount} file(s)` : `${fileCount} file(s)`;
+  }
+
+  private appendSnapshotDetail(existing: string | undefined, detail: string): string {
+    return existing ? `${existing} ${detail}` : detail;
   }
 
   private evaluatePath(
