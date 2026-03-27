@@ -1,6 +1,14 @@
 import * as assert from "assert/strict";
 import * as vscode from "vscode";
-import { loadEffectiveRules } from "../../rules";
+import {
+  compileRules,
+  findFirstMatchingCommandRule,
+  findMatchingProtectedCommandRule,
+  loadEffectiveRules,
+  matchesAnyCompiledRegexPattern
+} from "../../rules";
+import type { EditHeuristics, FileOperationRules } from "../../rules";
+import type { SafeExecRules } from "../../rules";
 import { activateExtension, getFixturePath, resetTestState, writeWorkspaceSettings } from "./helpers";
 
 suite("rule loading", () => {
@@ -49,4 +57,136 @@ suite("rule loading", () => {
       output.dispose();
     }
   });
+
+  test("compiled matchers ignore invalid regex patterns and keep matching valid rules", () => {
+    const compiled = compileRules(createTestRules({
+      dangerousCommands: [
+        { pattern: "(", description: "Broken dangerous rule", risk: "critical" },
+        { pattern: "SAFE_EXEC_VALID_DANGER", description: "Valid dangerous rule", risk: "high" }
+      ],
+      protectedCommands: [
+        { command: "/(/", description: "Broken protected command", risk: "medium" },
+        { command: "safeExec.validProtected", description: "Valid protected command", risk: "medium" }
+      ],
+      editHeuristics: {
+        protectedPathPatterns: ["(", "sample\\.ts$"],
+        ignoredPathPatterns: ["(", "node_modules[\\\\/]"]
+      },
+      fileOps: {
+        protectedPathPatterns: ["(", "package\\.json$"],
+        ignoredPathPatterns: ["(", "\\.git[\\\\/]"]
+      }
+    }));
+    const invalidCommandPatterns: string[] = [];
+    const invalidProtectedPatterns: string[] = [];
+
+    const dangerousRule = findFirstMatchingCommandRule(
+      "echo SAFE_EXEC_VALID_DANGER",
+      compiled.dangerousCommands,
+      (pattern, error) => invalidCommandPatterns.push(`${pattern}: ${error}`)
+    );
+    const protectedRule = findMatchingProtectedCommandRule(
+      "safeExec.validProtected",
+      compiled.protectedCommands,
+      (pattern, error) => invalidProtectedPatterns.push(`${pattern}: ${error}`)
+    );
+
+    assert.equal(dangerousRule?.pattern, "SAFE_EXEC_VALID_DANGER");
+    assert.equal(protectedRule?.command, "safeExec.validProtected");
+    assert.equal(matchesAnyCompiledRegexPattern(compiled.editHeuristics.protectedPathMatchers, "C:\\repo\\sample.ts"), true);
+    assert.equal(
+      matchesAnyCompiledRegexPattern(compiled.editHeuristics.ignoredPathMatchers, "C:\\repo\\node_modules\\pkg\\index.js"),
+      true
+    );
+    assert.equal(matchesAnyCompiledRegexPattern(compiled.fileOps.protectedPathMatchers, "C:\\repo\\package.json"), true);
+    assert.equal(matchesAnyCompiledRegexPattern(compiled.fileOps.ignoredPathMatchers, "C:\\repo\\.git\\config"), true);
+    assert.ok(invalidCommandPatterns.some((entry) => entry.startsWith("(: ")));
+    assert.ok(invalidProtectedPatterns.some((entry) => entry.startsWith("/(/: ")));
+  });
+
+  test("compiled matchers reuse precompiled regexes across repeated matches", () => {
+    const originalRegExp = RegExp;
+    let constructionCount = 0;
+
+    class CountingRegExp extends originalRegExp {
+      public constructor(pattern: string | RegExp, flags?: string) {
+        super(pattern, flags);
+        constructionCount += 1;
+      }
+    }
+
+    const globalObject = globalThis as typeof globalThis & { RegExp: RegExpConstructor };
+    globalObject.RegExp = CountingRegExp as unknown as RegExpConstructor;
+
+    try {
+      const compiled = compileRules(createTestRules({
+        dangerousCommands: [{ pattern: "SAFE_EXEC_PERF_COMMAND", risk: "critical" }],
+        protectedCommands: [{ command: "/^safeExec\\.perf$/", risk: "medium" }],
+        editHeuristics: {
+          protectedPathPatterns: ["perf\\.ts$"],
+          ignoredPathPatterns: ["node_modules[\\\\/]"]
+        },
+        fileOps: {
+          protectedPathPatterns: ["package\\.json$"],
+          ignoredPathPatterns: ["\\.git[\\\\/]"]
+        }
+      }));
+      const compiledConstructionCount = constructionCount;
+
+      assert.ok(compiledConstructionCount > 0);
+
+      for (let index = 0; index < 100; index += 1) {
+        assert.equal(findFirstMatchingCommandRule("echo SAFE_EXEC_PERF_COMMAND", compiled.dangerousCommands)?.pattern, "SAFE_EXEC_PERF_COMMAND");
+        assert.equal(findMatchingProtectedCommandRule("safeExec.perf", compiled.protectedCommands)?.command, "/^safeExec\\.perf$/");
+        assert.equal(matchesAnyCompiledRegexPattern(compiled.editHeuristics.protectedPathMatchers, "C:\\repo\\perf.ts"), true);
+        assert.equal(
+          matchesAnyCompiledRegexPattern(compiled.editHeuristics.ignoredPathMatchers, "C:\\repo\\node_modules\\pkg\\index.js"),
+          true
+        );
+        assert.equal(matchesAnyCompiledRegexPattern(compiled.fileOps.protectedPathMatchers, "C:\\repo\\package.json"), true);
+        assert.equal(matchesAnyCompiledRegexPattern(compiled.fileOps.ignoredPathMatchers, "C:\\repo\\.git\\config"), true);
+      }
+
+      assert.equal(constructionCount, compiledConstructionCount);
+    } finally {
+      globalObject.RegExp = originalRegExp;
+    }
+  });
 });
+
+interface TestRuleOverrides {
+  dangerousCommands?: SafeExecRules["dangerousCommands"];
+  allowedCommands?: SafeExecRules["allowedCommands"];
+  confirmationCommands?: SafeExecRules["confirmationCommands"];
+  protectedCommands?: SafeExecRules["protectedCommands"];
+  editHeuristics?: Partial<EditHeuristics>;
+  fileOps?: Partial<FileOperationRules>;
+}
+
+function createTestRules(overrides: TestRuleOverrides = {}): SafeExecRules {
+  return {
+    dangerousCommands: overrides.dangerousCommands ?? [],
+    allowedCommands: overrides.allowedCommands ?? [],
+    confirmationCommands: overrides.confirmationCommands ?? [],
+    protectedCommands: overrides.protectedCommands ?? [],
+    editHeuristics: {
+      minChangedCharacters: 5,
+      minAffectedLines: 1,
+      maxPreviewCharacters: 200,
+      multipleChangeCount: 3,
+      protectedPathPatterns: overrides.editHeuristics?.protectedPathPatterns ?? [],
+      ignoredPathPatterns: overrides.editHeuristics?.ignoredPathPatterns ?? []
+    },
+    fileOps: {
+      enabled: overrides.fileOps?.enabled ?? true,
+      maxSnapshotBytes: overrides.fileOps?.maxSnapshotBytes ?? 4096,
+      maxFilesPerOperation: overrides.fileOps?.maxFilesPerOperation ?? 10,
+      minBulkOperationCount: overrides.fileOps?.minBulkOperationCount ?? 3,
+      protectedPathPatterns: overrides.fileOps?.protectedPathPatterns ?? [],
+      ignoredPathPatterns: overrides.fileOps?.ignoredPathPatterns ?? [],
+      sensitiveExtensions: overrides.fileOps?.sensitiveExtensions ?? [],
+      sensitiveFileNames: overrides.fileOps?.sensitiveFileNames ?? [],
+      captureBinarySnapshots: overrides.fileOps?.captureBinarySnapshots ?? true
+    }
+  };
+}

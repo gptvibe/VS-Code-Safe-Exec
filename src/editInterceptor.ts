@@ -1,15 +1,16 @@
 import * as vscode from "vscode";
-import { AuditLog } from "./auditLog";
-import { DiffContentProvider, DiffSessionHandle } from "./diffContentProvider";
-import { PermissionUI } from "./permissionUI";
-import { EditHeuristics, RiskLevel, SafeExecRules, matchesAnyRegexPattern } from "./rules";
+import type { AuditLog } from "./auditLog";
+import type { DiffContentProvider, DiffSessionHandle } from "./diffContentProvider";
+import type { PermissionUI } from "./permissionUI";
+import { matchesAnyCompiledRegexPattern } from "./rules";
+import type { CompiledEditHeuristics, CompiledRules, EditHeuristics, RiskLevel } from "./rules";
 
 interface EditInterceptorOptions {
   output: vscode.OutputChannel;
   permissionUI: PermissionUI;
   auditLog: AuditLog;
   diffContentProvider: DiffContentProvider;
-  getRules: () => SafeExecRules;
+  getRules: () => CompiledRules;
   isEnabled: () => boolean;
 }
 
@@ -193,21 +194,21 @@ export class EditInterceptor {
   private evaluateChange(
     document: vscode.TextDocument,
     event: CapturedChangeEvent,
-    heuristics: EditHeuristics
+    heuristics: CompiledEditHeuristics
   ): SuspiciousEditEvaluation | undefined {
     if (event.changes.length === 0) {
       return undefined;
     }
 
     const targetPath = document.uri.scheme === "file" ? document.uri.fsPath : document.uri.toString();
-    if (matchesAnyRegexPattern(heuristics.ignoredPathPatterns, targetPath)) {
+    if (matchesAnyCompiledRegexPattern(heuristics.ignoredPathMatchers, targetPath)) {
       return undefined;
     }
 
     const reasons: string[] = [];
     const changedCharacters = this.calculateChangedCharacters(event.changes);
     const affectedLines = this.calculateAffectedLines(event.changes);
-    const protectedPath = matchesAnyRegexPattern(heuristics.protectedPathPatterns, targetPath);
+    const protectedPath = matchesAnyCompiledRegexPattern(heuristics.protectedPathMatchers, targetPath);
 
     if (changedCharacters >= heuristics.minChangedCharacters) {
       reasons.push(`changed ${changedCharacters} characters`);

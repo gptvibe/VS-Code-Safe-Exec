@@ -14,11 +14,14 @@ Safe Exec is not:
 
 The extension is intentionally honest about these limits in code, docs, and UI.
 
-## Protected surfaces
+See [COVERAGE_MATRIX.md](COVERAGE_MATRIX.md) for the current surface-by-surface coverage map.
+
+## Covered surfaces
 
 ### Terminal commands
 
 Safe Exec uses stable shell-integration APIs to inspect command text after VS Code reports a shell execution start event.
+Terminals that never provide that event are outside this approval flow.
 
 If a command matches:
 
@@ -32,9 +35,9 @@ Safe Exec then tries to interrupt and dispose the original terminal and replays 
 
 Safe Exec watches text-document change events, which are post-change. It snapshots file contents, rolls back suspicious edits, offers `Review Diff`, `Reapply Edit`, and `Deny`, and reapplies the captured ranges by default when approval is granted. Whole-document replacement is fallback only.
 
-### Protected commands
+### Explicit command wrappers
 
-Safe Exec protects command execution only through explicit Safe Exec proxy and wrapper commands. It does not claim transparent protection for arbitrary raw built-in commands.
+Safe Exec applies command approval only through explicit Safe Exec proxy and wrapper commands. It does not claim transparent protection for arbitrary raw built-in commands.
 
 ### File operations
 
@@ -53,6 +56,12 @@ For supported event-backed paths:
 - delete and rename operations are evaluated before completion
 - bounded snapshots are captured for supported delete and rename targets when feasible
 - restore commands can recreate or rename back supported delete or rename targets from stored snapshots
+
+Current implementation note:
+
+- file operations do not show an approval prompt today
+- `event.waitUntil(...)` is used for async preflight work, snapshot capture, and record creation, not for a user-facing allow or deny decision
+- file-operation audit entries named `intercepted` mean Safe Exec preflighted the operation before completion; they do not mean the operation was blocked
 
 Important boundary:
 
@@ -85,7 +94,7 @@ Because VS Code exposes text changes after they happen, Safe Exec cannot promise
 
 If the document changes while approval is pending, Safe Exec keeps the rollback and warns instead of overwriting the newer content.
 
-### Protected-command coverage is explicit
+### Command-wrapper coverage is explicit
 
 Coverage depends on using Safe Exec proxy commands or `safeExec.runProtectedCommand`.
 
@@ -106,11 +115,12 @@ What Safe Exec can honestly say:
 - it can do a best-effort preflight for supported `onWill*Files` paths
 - it can capture bounded snapshots before supported delete or rename operations complete
 - it can restore supported delete or rename snapshots later
+- it does not currently show a file-operation approval dialog or denial path
 
 What Safe Exec does not claim:
 
 - that every file operation in the workspace passes through these hooks
-- that a denied prompt creates a universal filesystem block
+- that file-operation preflight blocks completion or creates a universal filesystem block
 - that external disk changes are covered
 - that `workspace.fs` mutation paths are covered
 

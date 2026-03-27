@@ -2,8 +2,8 @@ import * as assert from "assert/strict";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as vscode from "vscode";
-import { AuditEvent } from "../../auditLog";
-import { SafeExecExtensionApi } from "../../extension";
+import type { AuditEvent } from "../../auditLog";
+import type { SafeExecExtensionApi } from "../../extension";
 
 const DEFAULT_WORKSPACE_SETTINGS = {
   "safeExec.enabled": true,
@@ -13,6 +13,7 @@ const DEFAULT_WORKSPACE_SETTINGS = {
   "safeExec.editHeuristics.minChangedCharacters": 5,
   "safeExec.editHeuristics.minAffectedLines": 1,
   "safeExec.editHeuristics.maxPreviewCharacters": 200,
+  "safeExec.terminal.criticalReplayPolicy": "bestEffort",
   "safeExec.fileOps.enabled": true,
   "safeExec.fileOps.maxSnapshotBytes": 262144,
   "safeExec.fileOps.maxFilesPerOperation": 25,

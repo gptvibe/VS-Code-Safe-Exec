@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as vscode from "vscode";
-import { RiskLevel } from "./rules";
+import type { RiskLevel } from "./rules";
 
 export type FileOperationKind = "create" | "delete" | "rename";
 export type FileOperationStatus = "pending" | "completed" | "denied" | "restored" | "restore-failed";

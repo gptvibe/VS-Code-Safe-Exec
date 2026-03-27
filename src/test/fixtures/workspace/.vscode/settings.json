@@ -6,6 +6,7 @@
   "safeExec.editHeuristics.minChangedCharacters": 5,
   "safeExec.editHeuristics.minAffectedLines": 1,
   "safeExec.editHeuristics.maxPreviewCharacters": 200,
+  "safeExec.terminal.criticalReplayPolicy": "manualReplay",
   "safeExec.fileOps.enabled": true,
   "safeExec.fileOps.maxSnapshotBytes": 262144,
   "safeExec.fileOps.maxFilesPerOperation": 25,

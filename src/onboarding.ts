@@ -1,4 +1,5 @@
-import { KeybindingInspection, renderKeybindingSummary } from "./keybindingInspector";
+import { renderKeybindingSummary } from "./keybindingInspector";
+import type { KeybindingInspection } from "./keybindingInspector";
 import { POLICY_BUNDLES } from "./rules";
 
 export function createOnboardingMarkdown(options: {
@@ -15,21 +16,23 @@ export function createOnboardingMarkdown(options: {
     "",
     `Protection is currently **${options.isEnabled ? "enabled" : "disabled"}**.`,
     "",
-    "## What Safe Exec Protects",
+    "## What Safe Exec Covers",
     "",
-    "- Risky terminal commands detected through VS Code shell integration.",
-    "- Explicit Safe Exec proxy commands for selected built-in commands.",
+    "- Risky terminal commands when VS Code shell integration reports a shell execution start event.",
+    "- Explicit Safe Exec proxy and wrapper commands for selected built-in commands.",
     "- Large or sensitive text edits through rollback, diff review, and reapply.",
     "- Best-effort file create, delete, and rename evaluation for supported VS Code file-operation events, with bounded recovery snapshots for supported delete and rename flows.",
     "",
-    "## What It Does Not Protect",
+    "## Where Coverage Stops",
     "",
     "- It does not sandbox extensions, shells, or the OS.",
-    "- It does not transparently override built-in commands unless you call a Safe Exec proxy.",
+    "- It does not transparently override built-in commands unless you call a Safe Exec proxy or wrapper command.",
     "- It cannot guarantee a risky terminal command never starts, because shell execution events are post-start.",
+    "- It only shows terminal approval prompts when VS Code shell integration reports the command.",
     "- It cannot preserve exact shell state when replaying an approved terminal command.",
+    "- File operations are not approval-gated today; Safe Exec currently classifies them, snapshots when possible, and records them.",
     "- It does not claim coverage for external disk changes, and VS Code `workspace.fs` operations may bypass file-operation hooks.",
-    "- It only restores file operations when Safe Exec captured a bounded snapshot first; oversized files and some non-file or non-recoverable cases fall back to metadata only.",
+    "- It only restores file operations when Safe Exec captured a bounded snapshot first; oversized files can fall back to metadata-only history, and unsupported or unreadable targets can fall back to observed-only entries.",
     "",
     "## Workspace Trust",
     "",
@@ -41,7 +44,7 @@ export function createOnboardingMarkdown(options: {
     "",
     "## Policy Bundles",
     "",
-    "Safe Exec includes opt-in bundle presets you can enable through rules or settings. They add stack-specific commands and protected paths without pretending to cover every tool.",
+    "Safe Exec includes opt-in bundle presets you can enable through rules or settings. They add stack-specific commands and path rules without pretending to cover every tool.",
     "",
     bundleList,
     "",

@@ -1,5 +1,9 @@
 # VS Code Safe Exec
 
+[![CI](https://github.com/gptvibe/VS-Code-Safe-Exec/actions/workflows/ci.yml/badge.svg)](https://github.com/gptvibe/VS-Code-Safe-Exec/actions/workflows/ci.yml)
+[![Coverage Gate](https://img.shields.io/badge/coverage-gated-brightgreen)](CONTRIBUTING.md#quality-gates)
+[![Lint](https://img.shields.io/badge/lint-eslint-4B32C3)](https://eslint.org)
+
 VS Code Safe Exec is a best-effort approval and recovery layer for risky actions that happen inside VS Code, especially when AI agents or automation can move faster than a human can comfortably review.
 
 Safe Exec is deliberately not a sandbox. It does not claim hard isolation, guaranteed prevention, or transparent interception of every risky action. It slows down risky flows where stable VS Code APIs make that practical, records what it saw, and says where coverage ends.
@@ -7,11 +11,11 @@ Safe Exec is deliberately not a sandbox. It does not claim hard isolation, guara
 ## At a glance
 
 - Risky terminal commands are matched after VS Code shell integration reports them.
-- Sensitive VS Code commands are protected only through explicit Safe Exec proxy and wrapper commands.
+- Selected VS Code commands are approval-gated only through explicit Safe Exec proxy and wrapper commands.
 - Large or sensitive text edits are handled with rollback, diff review, and reapply.
-- Supported file create, delete, and rename gestures are evaluated through VS Code file-operation events.
+- Supported VS Code create, delete, and rename file-operation events are evaluated and recorded.
 - Recoverable snapshots are captured for supported delete and rename flows when file size, file count, and file type limits allow it.
-- Oversized or unsupported file targets fall back to metadata-only tracking instead of fake recovery claims.
+- Oversized files can fall back to metadata-only entries, and unsupported or unreadable targets can fall back to observed-only entries.
 - Workspace Trust is surfaced honestly, but it is not treated as a security boundary.
 - Recent approvals, denials, degraded terminal replays, edit outcomes, file-operation events, and restore outcomes are recorded per workspace in local history.
 
@@ -29,7 +33,7 @@ _Illustrative SVG, not a captured VS Code screenshot._
 
 _Illustrative SVG, not a captured VS Code screenshot._
 
-## What Safe Exec protects
+## What Safe Exec covers
 
 ### 1. Risky terminal commands
 
@@ -81,6 +85,8 @@ Coverage is explicit:
 - External disk changes are not covered.
 - `workspace.fs` mutations may bypass these hooks.
 
+Current implementation note: file operations are not approval-gated today. Safe Exec classifies what VS Code reported, captures snapshots when possible, and records the result, but it does not show a file-operation allow or deny prompt.
+
 For supported delete and rename flows, Safe Exec performs a best-effort preflight before the operation completes:
 
 1. classify the operation by protected paths, sensitive names or extensions, bulk count, and subtree involvement
@@ -93,9 +99,10 @@ What recovery means today:
 - Text files: full-content restore from the captured snapshot
 - Small binary files: byte-for-byte restore when binary snapshots are enabled
 - Directories: structure is recorded so Safe Exec can recreate or rename back supported paths during restore
-- Oversized files or unsupported cases: metadata-only history, not content recovery
+- Oversized files or skipped binary capture: metadata-only history, not content recovery
+- Unsupported URIs or unreadable targets: observed-only entries, not content recovery
 
-Current restore commands:
+Current file-operation commands:
 
 - `Safe Exec: Show Recent File Operations`
 - `Safe Exec: Restore Last Recoverable File Operation`
@@ -110,16 +117,16 @@ Restore behavior stays conservative:
 
 Recovery storage is extension-managed, bounded, and garbage-collected. The current implementation keeps up to 60 recent file-operation records and prunes older snapshots once the stored payloads grow past roughly 20 MiB.
 
-### 4. Protected VS Code commands
+### 4. Explicit VS Code command wrappers
 
-Safe Exec does not pretend built-in commands can be transparently overridden. Command protection works only through explicit Safe Exec commands:
+Safe Exec does not pretend built-in commands can be transparently overridden. Command approval works only through explicit Safe Exec commands:
 
 - `safeExec.proxy.workbench.action.terminal.runSelectedText`
 - `safeExec.proxy.workbench.action.tasks.runTask`
 - `safeExec.proxy.github.copilot.generate`
 - `safeExec.runProtectedCommand`
 
-If a user or agent invokes the raw built-in command instead of the proxy, Safe Exec does not claim protection it does not have.
+If a user or agent invokes the raw built-in command instead of a Safe Exec proxy or wrapper, Safe Exec does not claim approval coverage it does not have.
 
 ## First-run and onboarding
 
@@ -132,8 +139,8 @@ Safe Exec includes a first-run onboarding flow, a main command, and a native wal
 
 The onboarding guide explains:
 
-- what Safe Exec protects
-- what it does not protect
+- what Safe Exec covers
+- where coverage stops
 - how Workspace Trust fits in
 - which proxy keybindings are recommended
 - which policy bundles are available
@@ -246,6 +253,7 @@ Important settings:
 - `safeExec.policyBundles`
 - `safeExec.protectedCommands`
 - `safeExec.terminal.killStrategy`
+- `safeExec.terminal.criticalReplayPolicy`
 - `safeExec.editHeuristics.minChangedCharacters`
 - `safeExec.editHeuristics.minAffectedLines`
 - `safeExec.editHeuristics.maxPreviewCharacters`
@@ -308,7 +316,7 @@ Safe Exec is intentionally explicit about residual risk:
 - built-in commands are not secretly wrapped; only Safe Exec proxies and wrappers are protected
 - keybindings that call raw built-in commands bypass proxy approval
 - edit interception is post-change, so rollback can race with later edits
-- file-operation coverage depends on VS Code file-operation events and is best effort
+- file-operation coverage depends on VS Code file-operation events, is best effort, and does not currently open an approval prompt
 - external disk changes are outside file-operation coverage
 - `workspace.fs` operations may bypass the file-operation hooks
 - file-operation restore is bounded by snapshot byte limits, file-count limits, file type support, and path conflicts during restore
@@ -317,8 +325,30 @@ Safe Exec is intentionally explicit about residual risk:
 
 If you need hard isolation, use OS-level permissions, containers, VMs, CI isolation, and least-privilege accounts. Safe Exec is a friction layer, not a sandbox.
 
+## Contributing
+
+Safe Exec now ships with release-grade CI gates. Before opening a pull request, run:
+
+```bash
+npm run check
+```
+
+Or run the individual steps:
+
+```bash
+npm run lint
+npm run typecheck
+npm run compile
+npm test
+npm run coverage
+```
+
+CI runs the quality gate on Ubuntu and the extension test suite on Ubuntu, Windows, and macOS. See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, coverage expectations, and pull request guidance.
+
 ## More detail
 
+- [COVERAGE_MATRIX.md](COVERAGE_MATRIX.md) lists current surface-by-surface coverage and bypasses.
+- [CONTRIBUTING.md](CONTRIBUTING.md) explains the local workflow and CI quality gates.
 - [DESIGN.md](DESIGN.md) explains the architecture and tradeoffs.
 - [RULES.md](RULES.md) explains rules, bundles, and merge behavior.
 - [SECURITY.md](SECURITY.md) explains the security posture, bypasses, and residual risk.

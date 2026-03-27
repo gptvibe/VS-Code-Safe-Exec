@@ -11,6 +11,8 @@ VS Code Safe Exec is a best-effort safety layer for four high-risk surfaces insi
 
 The design goal is to use stable VS Code APIs, keep behavior explainable, and avoid fake security claims.
 
+See [COVERAGE_MATRIX.md](COVERAGE_MATRIX.md) for the current surface-by-surface coverage summary.
+
 ## Core components
 
 - `src/extension.ts`
@@ -130,6 +132,9 @@ Safe Exec uses the will-events as a best-effort preflight layer:
 
 Important design constraint:
 
+- there is no file-operation approval dialog or deny path in the current implementation
+- `event.waitUntil(...)` is used for async inspection and snapshot capture, not for an approval gate
+- the `intercepted` audit label for delete and rename means Safe Exec created a preflight record before completion; it does not mean the operation was blocked
 - this is still not a hard prevention boundary
 - the implementation stays explicit that external disk changes and `workspace.fs` mutations may bypass it
 - the preflight and snapshot flow improves visibility and recovery, not universal blocking

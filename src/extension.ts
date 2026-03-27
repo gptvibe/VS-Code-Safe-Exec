@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
-import { AuditEvent, AuditLog } from "./auditLog";
+import { AuditLog } from "./auditLog";
+import type { AuditEvent } from "./auditLog";
 import { CommandInterceptor } from "./commandInterceptor";
 import { DiffContentProvider } from "./diffContentProvider";
 import { EditInterceptor } from "./editInterceptor";
@@ -8,17 +9,18 @@ import { FileOperationInterceptor } from "./fileOperationInterceptor";
 import { FileOperationRecoveryStore } from "./fileOperationRecoveryStore";
 import { inspectUserKeybindings, renderRecommendedKeybindingsJson } from "./keybindingInspector";
 import { createOnboardingMarkdown } from "./onboarding";
-import { ApprovalDecision, DeferredApprovalHandle, PermissionUI, ScriptedApprovalResponder } from "./permissionUI";
+import { PermissionUI, ScriptedApprovalResponder } from "./permissionUI";
+import type { ApprovalDecision, DeferredApprovalHandle } from "./permissionUI";
 import {
-  DEFAULT_RULES,
+  DEFAULT_COMPILED_RULES,
   POLICY_BUNDLES,
   SAMPLE_RULES_JSON,
-  SafeExecRules,
   ensureRulesFileExists,
   getSettings,
-  loadEffectiveRules,
+  loadCompiledRules,
   resolveRulesPath
 } from "./rules";
+import type { CompiledRules } from "./rules";
 import { TerminalInterceptor } from "./terminalInterceptor";
 
 export interface SafeExecExtensionApi {
@@ -36,7 +38,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   const permissionUI = new PermissionUI(output, scriptedResponder);
   const auditLog = new AuditLog(output, context.workspaceState);
   const diffContentProvider = new DiffContentProvider();
-  let effectiveRules: SafeExecRules = DEFAULT_RULES;
+  let effectiveRules: CompiledRules = DEFAULT_COMPILED_RULES;
   let rulesWatcher: vscode.Disposable | undefined;
   let latestKeybindingWarnings: string[] = [];
   let latestKeybindingAdvisories: string[] = [];
@@ -49,8 +51,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
   statusBar.show();
 
   const isEnabled = (): boolean => getSettings().enabled;
-  const getRules = (): SafeExecRules => effectiveRules;
+  const getRules = (): CompiledRules => effectiveRules;
   const getKillStrategy = () => getSettings().terminalKillStrategy;
+  const getCriticalReplayPolicy = () => getSettings().terminalCriticalReplayPolicy;
 
   const updateStatusBar = (): void => {
     if (!isEnabled()) {
@@ -58,7 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
       statusBar.tooltip = [
         "Safe Exec protection is disabled.",
         workspaceTrustLine(),
-        "File operations: best-effort preflight and bounded recovery remain unavailable while protection is off.",
+        "File operations: best-effort observation, preflight classification, and bounded recovery remain unavailable while protection is off.",
         keybindingStatusLine
       ].join("\n");
       return;
@@ -77,14 +80,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     statusBar.tooltip = [
       "Safe Exec is a best-effort approval layer, not a sandbox.",
       workspaceTrustLine(),
-      "File operations: best-effort preflight and bounded recovery for supported VS Code file gestures.",
+      "File operations: best-effort observation, preflight classification, and bounded recovery for supported VS Code file-operation events.",
       keybindingStatusLine
     ].join("\n");
   };
 
   const reloadRules = async (reason: string): Promise<void> => {
     try {
-      effectiveRules = await loadEffectiveRules(output);
+      effectiveRules = await loadCompiledRules(output);
       output.appendLine(`[extension] Reloaded rules (${reason}).`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -139,7 +142,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
       preview: false,
       viewColumn: vscode.ViewColumn.Beside
     });
-    document.isClosed;
   };
 
   const openOnboarding = async (): Promise<void> => {
@@ -184,7 +186,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
       [
         {
           label: "Open Onboarding",
-          description: "What Safe Exec protects, what it does not, and why proxies are explicit",
+          description: "What Safe Exec covers, where coverage stops, and why proxies are explicit",
           action: "onboarding" as const
         },
         {
@@ -305,7 +307,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     auditLog,
     getRules,
     isEnabled,
-    getKillStrategy
+    getKillStrategy,
+    getCriticalReplayPolicy
   });
   const editInterceptor = new EditInterceptor({
     output,
@@ -378,7 +381,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
     vscode.commands.registerCommand("safeExec.showEffectiveRules", async () => {
       const document = await vscode.workspace.openTextDocument({
         language: "json",
-        content: `${JSON.stringify(getRules(), null, 2)}\n`
+        content: `${JSON.stringify(getRules().raw, null, 2)}\n`
       });
       await vscode.window.showTextDocument(document, { preview: false, viewColumn: vscode.ViewColumn.Beside });
     }),
@@ -480,7 +483,7 @@ async function maybeShowFirstRunOnboarding(context: vscode.ExtensionContext): Pr
 
   await context.globalState.update(key, true);
   const selection = await vscode.window.showInformationMessage(
-    "Safe Exec is active. It is a best-effort approval layer, not a sandbox.",
+    "Safe Exec is active. It is a best-effort approval, rollback, and recovery layer, not a sandbox.",
     "Open Safe Exec",
     "Later"
   );

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { RiskLevel } from "./rules";
+import type { RiskLevel } from "./rules";
 
 export type ApprovalDecision = "allow" | "deny" | "review";
 

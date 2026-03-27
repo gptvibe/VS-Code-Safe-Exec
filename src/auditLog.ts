@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { RiskLevel } from "./rules";
+import type { RiskLevel } from "./rules";
 
 export type AuditSurface = "terminal" | "edit" | "command" | "file" | "workspace" | "onboarding";
 export type AuditAction =
@@ -14,6 +14,9 @@ export type AuditAction =
   | "range-based"
   | "whole-document-fallback"
   | "replayed"
+  | "manual-replay"
+  | "clipboard-copied"
+  | "replay-blocked"
   | "replay-degraded"
   | "replay-failed"
   | "denied"

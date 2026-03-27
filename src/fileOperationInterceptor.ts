@@ -1,22 +1,23 @@
-import { Dirent } from "fs";
+import type { Dirent } from "fs";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as vscode from "vscode";
-import { AuditLog } from "./auditLog";
-import {
+import type { AuditLog } from "./auditLog";
+import type {
   FileOperationKind,
   FileOperationRecord,
   FileOperationRecordInput,
   FileOperationRecoveryStore,
   FileOperationSnapshotInput
 } from "./fileOperationRecoveryStore";
-import { RiskLevel, SafeExecRules, matchesAnyRegexPattern } from "./rules";
+import { matchesAnyCompiledRegexPattern } from "./rules";
+import type { CompiledRules, RiskLevel } from "./rules";
 
 interface FileOperationInterceptorOptions {
   output: vscode.OutputChannel;
   auditLog: AuditLog;
   recoveryStore: FileOperationRecoveryStore;
-  getRules: () => SafeExecRules;
+  getRules: () => CompiledRules;
   isEnabled: () => boolean;
   showUserNotices: boolean;
 }
@@ -797,7 +798,7 @@ export class FileOperationInterceptor {
     }
 
     const rules = this.options.getRules().fileOps;
-    return matchesAnyRegexPattern(rules.protectedPathPatterns, uri.fsPath);
+    return matchesAnyCompiledRegexPattern(rules.protectedPathMatchers, uri.fsPath);
   }
 
   private isIgnoredPath(uri: vscode.Uri): boolean {
@@ -806,7 +807,7 @@ export class FileOperationInterceptor {
     }
 
     const rules = this.options.getRules().fileOps;
-    return matchesAnyRegexPattern(rules.ignoredPathPatterns, uri.fsPath);
+    return matchesAnyCompiledRegexPattern(rules.ignoredPathMatchers, uri.fsPath);
   }
 
   private isSensitivePath(uri: vscode.Uri): boolean {

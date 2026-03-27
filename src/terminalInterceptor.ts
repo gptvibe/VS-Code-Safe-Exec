@@ -1,17 +1,20 @@
 import * as vscode from "vscode";
-import { AuditLog } from "./auditLog";
-import { PermissionUI } from "./permissionUI";
-import { CommandPatternRule, SafeExecRules } from "./rules";
+import type { AuditLog } from "./auditLog";
+import type { PermissionUI } from "./permissionUI";
+import { findFirstMatchingCommandRule } from "./rules";
+import type { CommandPatternRule, CompiledCommandPatternRule, CompiledRules, RiskLevel, TerminalCriticalReplayPolicy } from "./rules";
 
 type MatchBucket = "dangerousCommands" | "confirmationCommands";
+type CompiledCommandRuleList = readonly CompiledCommandPatternRule[];
 
 interface TerminalInterceptorOptions {
   output: vscode.OutputChannel;
   permissionUI: PermissionUI;
   auditLog: AuditLog;
-  getRules: () => SafeExecRules;
+  getRules: () => CompiledRules;
   isEnabled: () => boolean;
   getKillStrategy: () => "interruptThenDispose" | "dispose";
+  getCriticalReplayPolicy: () => TerminalCriticalReplayPolicy;
 }
 
 interface MatchedCommand {
@@ -45,9 +48,43 @@ interface StopResult {
 }
 
 interface ReplayResult {
+  kind: "automatic";
   terminal: vscode.Terminal;
   mode: "shellIntegration" | "sendText";
   degradedReasons: string[];
+}
+
+interface ManualReplayResult {
+  kind: "manual";
+  terminal: vscode.Terminal;
+  degradedReasons: string[];
+  reason: CriticalReplayManualReason;
+  clipboardCopied: boolean;
+  clipboardError?: string;
+}
+
+type ApprovedExecutionResult = ReplayResult | ManualReplayResult;
+
+type CriticalReplayManualReason = "manualPolicy" | "stopUnconfirmed" | "shellIntegrationUnavailable";
+
+type CriticalReplayDecision =
+  | {
+      kind: "automatic";
+      shellIntegrationRequired: boolean;
+    }
+  | {
+      kind: "manual";
+      reason: CriticalReplayManualReason;
+    }
+  | {
+      kind: "deny";
+      reason: "stopUnconfirmed";
+    };
+
+interface ReplayAttemptOptions {
+  risk: RiskLevel;
+  criticalReplayPolicy: TerminalCriticalReplayPolicy;
+  stopConfirmed: boolean;
 }
 
 export interface SimulatedTerminalExecution {
@@ -61,6 +98,61 @@ export interface SimulatedTerminalExecution {
 const INTERRUPT_WAIT_MS = 150;
 const DISPOSE_WAIT_MS = 150;
 const SHELL_INTEGRATION_WAIT_MS = 1500;
+
+export interface CriticalReplayDecisionInput {
+  policy: TerminalCriticalReplayPolicy;
+  stopConfirmed: boolean;
+  shellIntegrationAvailable: boolean;
+}
+
+export function selectCriticalReplayDecision(input: CriticalReplayDecisionInput): CriticalReplayDecision {
+  if (input.policy === "manualReplay") {
+    return {
+      kind: "manual",
+      reason: "manualPolicy"
+    };
+  }
+
+  if (!input.stopConfirmed) {
+    if (input.policy === "bestEffort") {
+      return {
+        kind: "automatic",
+        shellIntegrationRequired: false
+      };
+    }
+
+    if (input.policy === "denyIfStopUnconfirmed") {
+      return {
+        kind: "deny",
+        reason: "stopUnconfirmed"
+      };
+    }
+
+    return {
+      kind: "manual",
+      reason: "stopUnconfirmed"
+    };
+  }
+
+  if (!input.shellIntegrationAvailable) {
+    if (input.policy === "bestEffort") {
+      return {
+        kind: "automatic",
+        shellIntegrationRequired: false
+      };
+    }
+
+    return {
+      kind: "manual",
+      reason: "shellIntegrationUnavailable"
+    };
+  }
+
+  return {
+    kind: "automatic",
+    shellIntegrationRequired: input.policy !== "bestEffort"
+  };
+}
 
 export class TerminalInterceptor {
   private readonly replayAllowances = new WeakMap<vscode.Terminal, Map<string, number>>();
@@ -126,19 +218,23 @@ export class TerminalInterceptor {
       return;
     }
 
+    const risk = this.getRisk(match);
+    const criticalReplayPolicy = risk === "critical" ? this.options.getCriticalReplayPolicy() : undefined;
     this.pendingPrompts.add(context.terminal);
     this.options.auditLog.record({
       action: "matched",
       surface: "terminal",
       source: `terminal:${context.terminal.name}`,
       summary: match.normalizedCommand,
-      risk: match.rule.risk ?? (match.bucket === "dangerousCommands" ? "critical" : "high"),
+      risk,
       detail: `Matched ${match.bucket}: ${match.rule.description ?? "custom terminal rule"}`,
       metadata: {
         pattern: match.rule.pattern,
         trusted: context.commandLine.isTrusted,
         confidence: context.commandLine.confidence,
-        cwdKnown: Boolean(context.cwd)
+        cwdKnown: Boolean(context.cwd),
+        criticalMatch: risk === "critical",
+        criticalReplayPolicy
       }
     });
 
@@ -171,9 +267,19 @@ export class TerminalInterceptor {
   }
 
   private async stopPromptAndReplay(context: InterceptedExecutionContext, match: MatchedCommand): Promise<void> {
+    const risk = this.getRisk(match);
+    const isCritical = risk === "critical";
+    const criticalReplayPolicy = isCritical ? this.options.getCriticalReplayPolicy() : "bestEffort";
     const replayContext = this.createReplayContext(context, match.normalizedCommand);
     const stopResult = await this.stopTerminal(context.terminal);
     const degradedContext = this.getContextWarnings(replayContext);
+    const initialCriticalDecision = isCritical
+      ? selectCriticalReplayDecision({
+          policy: criticalReplayPolicy,
+          stopConfirmed: stopResult.stopped,
+          shellIntegrationAvailable: true
+        })
+      : undefined;
 
     if (stopResult.interruptAttempted) {
       this.options.auditLog.record({
@@ -187,7 +293,9 @@ export class TerminalInterceptor {
         metadata: {
           usedInterrupt: stopResult.usedInterrupt,
           terminalStillPresent: stopResult.terminalStillPresent,
-          interruptFailed: Boolean(stopResult.interruptError)
+          interruptFailed: Boolean(stopResult.interruptError),
+          criticalMatch: isCritical,
+          criticalReplayPolicy
         }
       });
     }
@@ -206,7 +314,9 @@ export class TerminalInterceptor {
         usedInterrupt: stopResult.usedInterrupt,
         terminalStillPresent: stopResult.terminalStillPresent,
         disposeFailed: Boolean(stopResult.disposeError),
-        stopped: stopResult.stopped
+        stopped: stopResult.stopped,
+        criticalMatch: isCritical,
+        criticalReplayPolicy
       }
     });
 
@@ -216,9 +326,30 @@ export class TerminalInterceptor {
       `Command trust: ${context.commandLine.isTrusted ? "trusted" : "untrusted"}`,
       `Command confidence: ${confidenceLabel(context.commandLine.confidence)}`,
       `Captured cwd: ${replayContext.cwd?.toString() ?? "unknown"}`,
-      "Safe Exec replays in a new terminal. It preserves cwd and launch options when VS Code exposes them, but it cannot restore exact shell state.",
-      "Replay prefers shell integration execution and falls back to sendText if shell integration is unavailable in the replay terminal."
+      "Detection path: VS Code shell integration reported a shell execution start event for this integrated terminal.",
+      "This flow is post-start. The original command may already have begun before Safe Exec tries to interrupt or dispose the terminal.",
+      "Terminals without usable shell integration do not enter this approval flow.",
+      "Safe Exec replays in a new terminal. It preserves cwd and launch options when VS Code exposes them, but it cannot restore exact shell state."
     ];
+
+    if (isCritical) {
+      detailLines.push(`Critical replay policy: ${criticalReplayPolicy}.`);
+      if (initialCriticalDecision?.kind === "manual") {
+        detailLines.push(
+          `If you approve this critical command, Safe Exec will open a fresh terminal and copy the command to your clipboard for manual replay because ${describeManualReplayReason(initialCriticalDecision.reason)}.`
+        );
+      } else if (criticalReplayPolicy === "bestEffort") {
+        detailLines.push(
+          "Replay prefers shell integration execution and falls back to sendText if shell integration is unavailable in the replay terminal."
+        );
+      } else {
+        detailLines.push(
+          "If shell-integration replay is unavailable in the replay terminal, Safe Exec will switch to manual replay instead of falling back to sendText."
+        );
+      }
+    } else {
+      detailLines.push("Replay prefers shell integration execution and falls back to sendText if shell integration is unavailable in the replay terminal.");
+    }
 
     if (!stopResult.stopped) {
       detailLines.push("Warning: Safe Exec could not confirm the original terminal stopped cleanly. Replaying may double-run the command.");
@@ -230,15 +361,41 @@ export class TerminalInterceptor {
       this.log(`Replay context warnings for "${context.terminal.name}": ${degradedContext.join("; ")}`);
     }
 
+    if (initialCriticalDecision?.kind === "deny") {
+      const detail = `Critical replay policy denied replay because ${describePolicyBlockedReason(initialCriticalDecision.reason)}.`;
+      this.options.auditLog.record({
+        action: "replay-blocked",
+        surface: "terminal",
+        source: `terminal:${context.terminal.name}`,
+        summary: match.normalizedCommand,
+        risk,
+        detail,
+        metadata: {
+          criticalReplayPolicy,
+          stopConfirmed: stopResult.stopped,
+          cwdKnown: Boolean(replayContext.cwd)
+        }
+      });
+      this.log(`Blocked critical replay for "${context.terminal.name}": ${match.normalizedCommand} (${detail})`);
+      void vscode.window.showWarningMessage(`Safe Exec denied replay of this critical command because ${describePolicyBlockedReason(initialCriticalDecision.reason)}.`);
+      return;
+    }
+
+    const approvedOutcome = initialCriticalDecision?.kind === "manual" ? "manual-replay" : "automatic-replay";
     const approved = await this.options.permissionUI.requestApproval({
       title: match.bucket === "dangerousCommands" ? "Allow risky terminal command?" : "Allow terminal command after confirmation?",
       source: `terminal:${context.terminal.name}`,
-      risk: match.rule.risk ?? (match.bucket === "dangerousCommands" ? "critical" : "high"),
+      risk,
       summary: match.normalizedCommand,
       detail: detailLines.join("\n"),
       preview: context.commandLine.value,
       previewLanguage: "shellscript",
-      allowLabel: stopResult.stopped ? "Replay Command" : "Replay Anyway",
+      allowLabel:
+        initialCriticalDecision?.kind === "manual"
+          ? "Copy For Manual Replay"
+          : stopResult.stopped
+          ? "Replay Command"
+          : "Replay Anyway",
       denyLabel: "Deny"
     });
 
@@ -248,7 +405,13 @@ export class TerminalInterceptor {
         surface: "terminal",
         source: `terminal:${context.terminal.name}`,
         summary: match.normalizedCommand,
-        risk: match.rule.risk ?? (match.bucket === "dangerousCommands" ? "critical" : "high")
+        risk,
+        metadata: {
+          criticalMatch: isCritical,
+          criticalReplayPolicy,
+          stopConfirmed: stopResult.stopped,
+          outcome: approvedOutcome
+        }
       });
       this.log(`Denied terminal command from "${context.terminal.name}": ${match.normalizedCommand}`);
       return;
@@ -259,11 +422,84 @@ export class TerminalInterceptor {
       surface: "terminal",
       source: `terminal:${context.terminal.name}`,
       summary: match.normalizedCommand,
-      risk: match.rule.risk ?? (match.bucket === "dangerousCommands" ? "critical" : "high")
+      risk,
+      metadata: {
+        criticalMatch: isCritical,
+        criticalReplayPolicy,
+        stopConfirmed: stopResult.stopped,
+        outcome: approvedOutcome
+      }
     });
 
     try {
-      const replay = await this.replayCommand(replayContext);
+      const replay = await this.replayCommand(replayContext, {
+        risk,
+        criticalReplayPolicy,
+        stopConfirmed: stopResult.stopped
+      });
+      if (replay.kind === "manual") {
+        if (replay.clipboardCopied) {
+          this.options.auditLog.record({
+            action: "clipboard-copied",
+            surface: "terminal",
+            source: `terminal:${replay.terminal.name}`,
+            summary: match.normalizedCommand,
+            risk,
+            detail: "Safe Exec copied the approved command to the clipboard for manual replay.",
+            metadata: {
+              criticalReplayPolicy,
+              stopConfirmed: stopResult.stopped
+            }
+          });
+        }
+
+        this.options.auditLog.record({
+          action: "manual-replay",
+          surface: "terminal",
+          source: `terminal:${replay.terminal.name}`,
+          summary: match.normalizedCommand,
+          risk,
+          detail: replay.clipboardError
+            ? `Manual replay prepared because ${describeManualReplayReason(replay.reason)}. Clipboard copy failed: ${replay.clipboardError}`
+            : `Manual replay prepared because ${describeManualReplayReason(replay.reason)}.`,
+          metadata: {
+            criticalReplayPolicy,
+            stopConfirmed: stopResult.stopped,
+            cwdKnown: Boolean(replayContext.cwd),
+            clipboardCopied: replay.clipboardCopied,
+            degradationCount: replay.degradedReasons.length
+          }
+        });
+
+        if (replay.degradedReasons.length > 0) {
+          this.options.auditLog.record({
+            action: "replay-degraded",
+            surface: "terminal",
+            source: `terminal:${replay.terminal.name}`,
+            summary: match.normalizedCommand,
+            detail: replay.degradedReasons.join("; "),
+            metadata: {
+              degradationCount: replay.degradedReasons.length,
+              criticalReplayPolicy
+            }
+          });
+        }
+
+        this.log(
+          `Prepared manual replay in "${replay.terminal.name}" for "${context.terminal.name}": ${match.normalizedCommand} (${describeManualReplayReason(replay.reason)})`
+        );
+        if (replay.clipboardError) {
+          void vscode.window.showWarningMessage(
+            `Safe Exec opened a manual replay terminal, but could not copy the command to your clipboard: ${replay.clipboardError}`
+          );
+        } else {
+          void vscode.window.showInformationMessage(
+            "Safe Exec opened a manual replay terminal and copied the approved command to your clipboard."
+          );
+        }
+        return;
+      }
+
       this.options.auditLog.record({
         action: "replayed",
         surface: "terminal",
@@ -272,7 +508,9 @@ export class TerminalInterceptor {
         detail: `Replay mode: ${replay.mode}`,
         metadata: {
           shellIntegration: replay.mode === "shellIntegration",
-          cwdKnown: Boolean(replayContext.cwd)
+          cwdKnown: Boolean(replayContext.cwd),
+          criticalReplayPolicy,
+          stopConfirmed: stopResult.stopped
         }
       });
 
@@ -284,7 +522,8 @@ export class TerminalInterceptor {
           summary: match.normalizedCommand,
           detail: replay.degradedReasons.join("; "),
           metadata: {
-            degradationCount: replay.degradedReasons.length
+            degradationCount: replay.degradedReasons.length,
+            criticalReplayPolicy
           }
         });
         this.log(`Replayed with degraded context in "${replay.terminal.name}": ${replay.degradedReasons.join("; ")}`);
@@ -298,7 +537,11 @@ export class TerminalInterceptor {
         surface: "terminal",
         source: `terminal:${context.terminal.name}`,
         summary: match.normalizedCommand,
-        detail: `Replay failed: ${message}`
+        detail: `Replay failed: ${message}`,
+        metadata: {
+          criticalReplayPolicy,
+          stopConfirmed: stopResult.stopped
+        }
       });
       this.log(`Failed to replay approved command from "${context.terminal.name}": ${message}`);
       void vscode.window.showErrorMessage(`Safe Exec failed to replay the approved command: ${message}`);
@@ -352,13 +595,25 @@ export class TerminalInterceptor {
     return result;
   }
 
-  private async replayCommand(context: ReplayContext): Promise<ReplayResult> {
-    const replayTerminal = vscode.window.createTerminal({
-      name: `Safe Exec Replay: ${context.terminal.name}`,
-      ...context.launchOptions,
-      cwd: context.cwd
-    });
+  private async replayCommand(context: ReplayContext, options: ReplayAttemptOptions): Promise<ApprovedExecutionResult> {
+    const initialCriticalDecision =
+      options.risk === "critical"
+        ? selectCriticalReplayDecision({
+            policy: options.criticalReplayPolicy,
+            stopConfirmed: options.stopConfirmed,
+            shellIntegrationAvailable: true
+          })
+        : undefined;
 
+    if (initialCriticalDecision?.kind === "manual") {
+      return this.prepareManualReplay(context, initialCriticalDecision.reason, this.getContextWarnings(context));
+    }
+
+    if (initialCriticalDecision?.kind === "deny") {
+      throw new Error(`Critical replay was blocked because ${describePolicyBlockedReason(initialCriticalDecision.reason)}.`);
+    }
+
+    const replayTerminal = this.createReplayTerminal(context, "Replay");
     this.allowReplayOnce(replayTerminal, context.normalizedCommand);
     replayTerminal.show(true);
 
@@ -367,8 +622,21 @@ export class TerminalInterceptor {
 
     if (!shellIntegration) {
       degradedReasons.push("shell integration unavailable in the replay terminal");
+      const criticalDecision =
+        options.risk === "critical"
+          ? selectCriticalReplayDecision({
+              policy: options.criticalReplayPolicy,
+              stopConfirmed: options.stopConfirmed,
+              shellIntegrationAvailable: false
+            })
+          : undefined;
+      if (criticalDecision?.kind === "manual") {
+        return this.prepareManualReplay(context, criticalDecision.reason, degradedReasons, replayTerminal);
+      }
+
       replayTerminal.sendText(context.commandLine.value, true);
       return {
+        kind: "automatic",
         terminal: replayTerminal,
         mode: "sendText",
         degradedReasons
@@ -382,6 +650,7 @@ export class TerminalInterceptor {
         normalizedCommand: context.normalizedCommand
       });
       return {
+        kind: "automatic",
         terminal: replayTerminal,
         mode: "shellIntegration",
         degradedReasons
@@ -389,13 +658,63 @@ export class TerminalInterceptor {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       degradedReasons.push(`shell integration replay failed: ${message}`);
+      const criticalDecision =
+        options.risk === "critical"
+          ? selectCriticalReplayDecision({
+              policy: options.criticalReplayPolicy,
+              stopConfirmed: options.stopConfirmed,
+              shellIntegrationAvailable: false
+            })
+          : undefined;
+      if (criticalDecision?.kind === "manual") {
+        return this.prepareManualReplay(context, criticalDecision.reason, degradedReasons, replayTerminal);
+      }
+
       replayTerminal.sendText(context.commandLine.value, true);
       return {
+        kind: "automatic",
         terminal: replayTerminal,
         mode: "sendText",
         degradedReasons
       };
     }
+  }
+
+  private async prepareManualReplay(
+    context: ReplayContext,
+    reason: CriticalReplayManualReason,
+    degradedReasons: string[],
+    replaceTerminal?: vscode.Terminal
+  ): Promise<ManualReplayResult> {
+    if (replaceTerminal) {
+      try {
+        replaceTerminal.dispose();
+      } catch {
+        // Ignore best-effort cleanup failures and continue with manual replay.
+      }
+    }
+
+    const manualTerminal = this.createReplayTerminal(context, "Manual Replay");
+    manualTerminal.show(true);
+
+    let clipboardCopied = false;
+    let clipboardError: string | undefined;
+    try {
+      await vscode.env.clipboard.writeText(context.commandLine.value);
+      clipboardCopied = true;
+    } catch (error) {
+      clipboardError = error instanceof Error ? error.message : String(error);
+      this.log(`Failed to copy manual replay command for "${manualTerminal.name}": ${clipboardError}`);
+    }
+
+    return {
+      kind: "manual",
+      terminal: manualTerminal,
+      degradedReasons,
+      reason,
+      clipboardCopied,
+      clipboardError
+    };
   }
 
   private getContextWarnings(context: ReplayContext): string[] {
@@ -452,7 +771,19 @@ export class TerminalInterceptor {
     });
   }
 
-  private matchCommand(command: string, rules: SafeExecRules): MatchedCommand | undefined {
+  private createReplayTerminal(context: ReplayContext, label: "Replay" | "Manual Replay"): vscode.Terminal {
+    return vscode.window.createTerminal({
+      name: `Safe Exec ${label}: ${context.terminal.name}`,
+      ...context.launchOptions,
+      cwd: context.cwd
+    });
+  }
+
+  private getRisk(match: MatchedCommand): RiskLevel {
+    return match.rule.risk ?? (match.bucket === "dangerousCommands" ? "critical" : "high");
+  }
+
+  private matchCommand(command: string, rules: CompiledRules): MatchedCommand | undefined {
     if (this.matchesAnyRule(command, rules.allowedCommands)) {
       return undefined;
     }
@@ -478,27 +809,18 @@ export class TerminalInterceptor {
     return undefined;
   }
 
-  private matchesAnyRule(command: string, rules: readonly CommandPatternRule[]): boolean {
+  private matchesAnyRule(command: string, rules: CompiledCommandRuleList): boolean {
     return Boolean(this.findFirstMatch(command, rules));
   }
 
-  private findFirstMatch(command: string, rules: readonly CommandPatternRule[]): CommandPatternRule | undefined {
-    for (const rule of rules) {
-      try {
-        if (new RegExp(rule.pattern, "i").test(command)) {
-          return rule;
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const key = `${rule.pattern}:${message}`;
-        if (!this.warnedPatterns.has(key)) {
-          this.warnedPatterns.add(key);
-          this.log(`Ignoring invalid terminal rule pattern "${rule.pattern}": ${message}`);
-        }
+  private findFirstMatch(command: string, rules: CompiledCommandRuleList): CommandPatternRule | undefined {
+    return findFirstMatchingCommandRule(command, rules, (pattern, error) => {
+      const key = `${pattern}:${error}`;
+      if (!this.warnedPatterns.has(key)) {
+        this.warnedPatterns.add(key);
+        this.log(`Ignoring invalid terminal rule pattern "${pattern}": ${error}`);
       }
-    }
-
-    return undefined;
+    });
   }
 
   private allowReplayOnce(terminal: vscode.Terminal, normalizedCommand: string): void {
@@ -574,6 +896,24 @@ function confidenceLabel(confidence: vscode.TerminalShellExecutionCommandLineCon
       return "medium";
     default:
       return "low";
+  }
+}
+
+function describeManualReplayReason(reason: CriticalReplayManualReason): string {
+  switch (reason) {
+    case "manualPolicy":
+      return "the critical replay policy requires manual replay";
+    case "stopUnconfirmed":
+      return "Safe Exec could not confirm the original terminal stopped cleanly";
+    case "shellIntegrationUnavailable":
+      return "shell-integration replay was unavailable";
+  }
+}
+
+function describePolicyBlockedReason(reason: "stopUnconfirmed"): string {
+  switch (reason) {
+    case "stopUnconfirmed":
+      return "Safe Exec could not confirm the original terminal stopped cleanly";
   }
 }
 

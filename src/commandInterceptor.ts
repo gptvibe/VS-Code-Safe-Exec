@@ -1,13 +1,14 @@
 import * as vscode from "vscode";
-import { AuditLog } from "./auditLog";
-import { PermissionUI } from "./permissionUI";
-import { ProtectedCommandRule, RiskLevel, SafeExecRules } from "./rules";
+import type { AuditLog } from "./auditLog";
+import type { PermissionUI } from "./permissionUI";
+import { findMatchingProtectedCommandRule } from "./rules";
+import type { CompiledRules, ProtectedCommandRule, RiskLevel } from "./rules";
 
 export interface CommandInterceptorOptions {
   output: vscode.OutputChannel;
   permissionUI: PermissionUI;
   auditLog: AuditLog;
-  getRules: () => SafeExecRules;
+  getRules: () => CompiledRules;
   isEnabled: () => boolean;
 }
 
@@ -198,27 +199,9 @@ export class CommandInterceptor {
   }
 
   private findProtectedCommandRule(targetCommand: string): ProtectedCommandRule | undefined {
-    return this.options.getRules().protectedCommands.find((rule) => this.matchesCommandRule(rule.command, targetCommand));
-  }
-
-  private matchesCommandRule(pattern: string, targetCommand: string): boolean {
-    const trimmedPattern = pattern.trim();
-    if (!trimmedPattern) {
-      return false;
-    }
-
-    const regexMatch = /^\/(.+)\/([a-z]*)$/i.exec(trimmedPattern);
-    if (regexMatch) {
-      try {
-        return new RegExp(regexMatch[1], regexMatch[2]).test(targetCommand);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.log(`Ignoring invalid protected command pattern "${trimmedPattern}": ${message}`);
-        return false;
-      }
-    }
-
-    return trimmedPattern === targetCommand;
+    return findMatchingProtectedCommandRule(targetCommand, this.options.getRules().protectedCommands, (pattern, error) => {
+      this.log(`Ignoring invalid protected command pattern "${pattern}": ${error}`);
+    });
   }
 
   private log(message: string): void {
