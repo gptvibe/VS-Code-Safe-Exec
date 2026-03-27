@@ -19,7 +19,8 @@ suite("support utilities", () => {
     const text = vscode.window.activeTextEditor?.document.getText() ?? "";
     assert.match(text, /# Safe Exec Onboarding/);
     assert.match(text, /## Policy Bundles/);
-    assert.match(text, /## Proxy Keybindings/);
+    assert.match(text, /## Proxy And Wrapper Keybindings/);
+    assert.match(text, /## Automation-Heavy Command Coverage/);
 
     await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
   });
@@ -40,6 +41,8 @@ suite("support utilities", () => {
 
     const text = vscode.window.activeTextEditor?.document.getText() ?? "";
     assert.match(text, /safeExec\.proxy\.workbench\.action\.terminal\.runSelectedText/);
+    assert.match(text, /safeExec\.proxy\.notebook\.cell\.execute/);
+    assert.match(text, /safeExec\.runProtectedCommand/);
     assert.doesNotMatch(text, /description/);
 
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");

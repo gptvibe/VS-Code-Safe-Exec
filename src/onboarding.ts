@@ -1,5 +1,10 @@
 import { renderKeybindingSummary } from "./keybindingInspector";
 import type { KeybindingInspection } from "./keybindingInspector";
+import {
+  PROTECTED_COMMAND_VERIFICATION_NOTE,
+  VERIFIED_EXPLICIT_PROXY_COMMAND_DEFINITIONS,
+  WRAPPER_ONLY_PROTECTED_COMMAND_DEFINITIONS
+} from "./protectedCommandCatalog";
 import { POLICY_BUNDLES } from "./rules";
 
 export function createOnboardingMarkdown(options: {
@@ -10,6 +15,13 @@ export function createOnboardingMarkdown(options: {
   const bundleList = Object.values(POLICY_BUNDLES)
     .map((bundle) => `- \`${bundle.id}\`: ${bundle.description}`)
     .join("\n");
+  const explicitProxyList = VERIFIED_EXPLICIT_PROXY_COMMAND_DEFINITIONS.map(
+    (definition) =>
+      `- \`${definition.proxyCommand}\` -> \`${definition.targetCommand}\`: ${definition.reason}`
+  ).join("\n");
+  const wrapperOnlyList = WRAPPER_ONLY_PROTECTED_COMMAND_DEFINITIONS.map(
+    (definition) => `- \`safeExec.runProtectedCommand\` for \`${definition.targetCommand}\`: ${definition.reason}`
+  ).join("\n");
 
   return [
     "# Safe Exec Onboarding",
@@ -41,6 +53,18 @@ export function createOnboardingMarkdown(options: {
       : "- This workspace is not trusted. Workspace Trust can reduce what VS Code enables automatically, but it is not a sandbox and Safe Exec remains a best-effort guardrail.",
     "",
     renderKeybindingSummary(options.keybindingInspection),
+    "",
+    "## Automation-Heavy Command Coverage",
+    "",
+    PROTECTED_COMMAND_VERIFICATION_NOTE,
+    "",
+    "Explicit Safe Exec proxies now cover these documented command IDs:",
+    "",
+    explicitProxyList,
+    "",
+    "Wrapper-first commands still stay explicit through `safeExec.runProtectedCommand`:",
+    "",
+    wrapperOnlyList,
     "",
     "## Policy Bundles",
     "",

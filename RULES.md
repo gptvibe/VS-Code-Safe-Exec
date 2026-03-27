@@ -102,6 +102,8 @@ Important:
 
 - protected-command rules only apply when the command is invoked through a Safe Exec proxy or `safeExec.runProtectedCommand`
 - they do not transparently intercept raw built-in commands
+- the built-in defaults now cover verified automation-heavy built-ins such as `workbench.action.terminal.runSelectedText`, `workbench.action.tasks.runTask`, `notebook.execute`, `notebook.cell.execute`, `interactive.execute`, `workbench.extensions.installExtension`, `workbench.extensions.uninstallExtension`, `vscode.openFolder`, and `vscode.newWindow`
+- those stable command IDs were checked against the VS Code Built-in Commands reference updated on March 25, 2026 and against the current VS Code 1.113.0 host used in this repository's tests
 
 ### Edit heuristics
 

@@ -2,12 +2,18 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import {
+  VERIFIED_EXPLICIT_PROXY_COMMAND_DEFINITIONS,
+  WRAPPED_COMMAND_KEYBINDING_EXAMPLES,
+  type ExplicitProxyCommandDefinition
+} from "./protectedCommandCatalog";
 
 export interface KeybindingEntry {
   key?: string;
   command?: string;
   when?: string;
   mac?: string;
+  args?: unknown;
 }
 
 export interface KeybindingInspection {
@@ -22,57 +28,39 @@ export interface RecommendedKeybinding extends KeybindingEntry {
   description: string;
 }
 
-const GUARDED_BINDINGS = [
-  {
-    rawCommand: "workbench.action.terminal.runSelectedText",
-    proxyCommand: "safeExec.proxy.workbench.action.terminal.runSelectedText",
-    label: "Run selected text in terminal"
-  },
-  {
-    rawCommand: "workbench.action.tasks.runTask",
-    proxyCommand: "safeExec.proxy.workbench.action.tasks.runTask",
-    label: "Run task"
-  },
-  {
-    rawCommand: "github.copilot.generate",
-    proxyCommand: "safeExec.proxy.github.copilot.generate",
-    label: "Copilot generate"
-  }
-] as const;
+interface GuardedBinding {
+  rawCommand: string;
+  proxyCommand: string;
+  label: string;
+  recommendedKeybinding?: RecommendedKeybinding;
+}
 
-export const RECOMMENDED_PROXY_KEYBINDINGS: RecommendedKeybinding[] = [
-  {
-    key: "ctrl+enter",
-    mac: "cmd+enter",
-    command: "safeExec.proxy.workbench.action.terminal.runSelectedText",
-    when: "editorTextFocus && editorHasSelection",
-    description: "Routes the common terminal-send shortcut through Safe Exec."
-  },
-  {
-    key: "ctrl+alt+r",
-    mac: "cmd+alt+r",
-    command: "safeExec.proxy.workbench.action.tasks.runTask",
-    when: "workbenchState != empty",
-    description: "Adds a dedicated guarded shortcut for running tasks."
-  },
-  {
-    key: "ctrl+alt+g",
-    mac: "cmd+alt+g",
-    command: "safeExec.proxy.github.copilot.generate",
-    when: "editorTextFocus",
-    description: "Adds a dedicated guarded shortcut for AI generation."
-  }
-];
+const GUARDED_BINDINGS: readonly GuardedBinding[] = VERIFIED_EXPLICIT_PROXY_COMMAND_DEFINITIONS.map((definition) =>
+  toGuardedBinding(definition)
+);
+
+const ADVISORY_BINDINGS = GUARDED_BINDINGS.filter((binding) => binding.recommendedKeybinding);
+
+export const RECOMMENDED_PROXY_KEYBINDINGS: RecommendedKeybinding[] = GUARDED_BINDINGS.flatMap((binding) =>
+  binding.recommendedKeybinding ? [binding.recommendedKeybinding] : []
+);
+
+export const RECOMMENDED_WRAPPED_COMMAND_KEYBINDINGS: RecommendedKeybinding[] = WRAPPED_COMMAND_KEYBINDING_EXAMPLES.map(
+  ({ description, ...entry }) => ({
+    ...entry,
+    description
+  })
+);
 
 export async function inspectUserKeybindings(): Promise<KeybindingInspection> {
   const sourcePath = resolveKeybindingsPath(vscode.env.appName);
   if (!sourcePath) {
-      return {
-        entries: [],
-        warnings: [],
-        advisories: [],
-        error: "Safe Exec could not determine a keybindings.json path for this VS Code build."
-      };
+    return {
+      entries: [],
+      warnings: [],
+      advisories: [],
+      error: "Safe Exec could not determine a keybindings.json path for this VS Code build."
+    };
   }
 
   try {
@@ -92,7 +80,7 @@ export async function inspectUserKeybindings(): Promise<KeybindingInspection> {
         sourcePath,
         entries: [],
         warnings: [],
-        advisories: GUARDED_BINDINGS.map(
+        advisories: ADVISORY_BINDINGS.map(
           (binding) =>
             `${binding.label} has no Safe Exec proxy keybinding yet, so common raw entry points may still be easier to reach than the proxy command.`
         ),
@@ -112,7 +100,9 @@ export async function inspectUserKeybindings(): Promise<KeybindingInspection> {
 
 export function renderRecommendedKeybindingsJson(): string {
   return `${JSON.stringify(
-    RECOMMENDED_PROXY_KEYBINDINGS.map(({ description: _description, ...binding }) => binding),
+    [...RECOMMENDED_PROXY_KEYBINDINGS, ...RECOMMENDED_WRAPPED_COMMAND_KEYBINDINGS].map(
+      ({ description: _description, ...binding }) => binding
+    ),
     null,
     2
   )}\n`;
@@ -120,9 +110,9 @@ export function renderRecommendedKeybindingsJson(): string {
 
 export function renderKeybindingSummary(inspection: KeybindingInspection): string {
   const lines = [
-    "## Proxy Keybindings",
+    "## Proxy And Wrapper Keybindings",
     "",
-    "Safe Exec cannot transparently override built-in VS Code commands. Proxy coverage depends on which commands you bind and call.",
+    "Safe Exec cannot transparently override built-in VS Code commands. Coverage depends on which proxy commands or wrapper bindings you actually route through Safe Exec.",
     ""
   ];
 
@@ -147,7 +137,7 @@ export function renderKeybindingSummary(inspection: KeybindingInspection): strin
   }
 
   lines.push("");
-  lines.push("Recommended starter bindings:");
+  lines.push("Recommended starter bindings and wrapper examples:");
   lines.push("");
   lines.push("```json");
   lines.push(renderRecommendedKeybindingsJson().trimEnd());
@@ -178,7 +168,7 @@ function collectFindings(entries: readonly KeybindingEntry[]): { warnings: strin
       }
     }
 
-    if (proxyEntries.length === 0) {
+    if (guardedBinding.recommendedKeybinding && proxyEntries.length === 0) {
       advisories.push(
         `${guardedBinding.label} has no Safe Exec proxy keybinding yet, so common raw entry points may still be easier to reach than the proxy command.`
       );
@@ -231,4 +221,21 @@ function getProductFolderName(appName: string): string {
   }
 
   return "Code";
+}
+
+function toGuardedBinding(definition: ExplicitProxyCommandDefinition): GuardedBinding {
+  return {
+    rawCommand: definition.targetCommand,
+    proxyCommand: definition.proxyCommand,
+    label: definition.label,
+    recommendedKeybinding: definition.recommendedKeybinding
+      ? {
+          key: definition.recommendedKeybinding.key,
+          mac: definition.recommendedKeybinding.mac,
+          command: definition.proxyCommand,
+          when: definition.recommendedKeybinding.when,
+          description: definition.recommendedKeybinding.description
+        }
+      : undefined
+  };
 }

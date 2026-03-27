@@ -123,10 +123,20 @@ Safe Exec does not pretend built-in commands can be transparently overridden. Co
 
 - `safeExec.proxy.workbench.action.terminal.runSelectedText`
 - `safeExec.proxy.workbench.action.tasks.runTask`
-- `safeExec.proxy.github.copilot.generate`
+- `safeExec.proxy.notebook.execute`
+- `safeExec.proxy.notebook.cell.execute`
+- `safeExec.proxy.interactive.execute`
+- `safeExec.proxy.workbench.extensions.installExtension`
+- `safeExec.proxy.workbench.extensions.uninstallExtension`
 - `safeExec.runProtectedCommand`
 
+The built-in command IDs above were verified against the VS Code Built-in Commands reference updated on March 25, 2026 and against the current VS Code 1.113.0 test host used in this repository.
+
+Wrapper-first flows stay explicit too. `safeExec.runProtectedCommand` is the recommended route for commands like `vscode.openFolder` and `vscode.newWindow` where the arguments matter as much as the command ID.
+
 If a user or agent invokes the raw built-in command instead of a Safe Exec proxy or wrapper, Safe Exec does not claim approval coverage it does not have.
+
+Extension-contributed commands such as `github.copilot.generate` can still be routed through dedicated Safe Exec proxies when they exist in the current session, but they are not treated as part of the stable built-in command set above.
 
 ## First-run and onboarding
 
@@ -135,18 +145,19 @@ Safe Exec includes a first-run onboarding flow, a main command, and a native wal
 - `Safe Exec: Open Safe Exec`
 - `Safe Exec: Open Onboarding`
 - `Get Started with Safe Exec`
-- `Safe Exec: Open Recommended Proxy Keybindings`
+- `Safe Exec: Open Recommended Proxy And Wrapper Keybindings`
 
 The onboarding guide explains:
 
 - what Safe Exec covers
 - where coverage stops
 - how Workspace Trust fits in
-- which proxy keybindings are recommended
+- which proxy and wrapper keybindings are recommended
+- which automation-heavy built-in command IDs were verified for this extension
 - which policy bundles are available
 - how file-operation recovery works and where it does not apply
 
-Safe Exec can inspect the user `keybindings.json` file, warn when common raw guarded commands are bound directly without an equivalent Safe Exec proxy binding, and call out when common guarded commands still have no proxy shortcut at all. It opens a recommended JSON snippet beside the user keybindings file, but it does not edit keybindings automatically.
+Safe Exec can inspect the user `keybindings.json` file, warn when common raw guarded commands are bound directly without an equivalent Safe Exec proxy binding, and call out when common guarded commands still have no proxy shortcut at all. It opens recommended proxy and wrapper JSON snippets beside the user keybindings file, but it does not edit keybindings automatically.
 
 ## Status bar and recent activity
 
@@ -218,7 +229,7 @@ Examples:
 
 1. Install the extension.
 2. Open `Safe Exec: Open Safe Exec` or click the Safe Exec status bar item.
-3. Review `Safe Exec: Open Recommended Proxy Keybindings` and wire proxy commands for the shortcuts you actually use.
+3. Review `Safe Exec: Open Recommended Proxy And Wrapper Keybindings` and route the shortcuts or automation commands you actually use through Safe Exec.
 4. Open `Safe Exec: Open Rules File` and enable any policy bundles that match your stack.
 5. Review `Safe Exec: Show Recent File Operations` so you know where recoverable delete and rename history will appear.
 6. Keep an eye on the status bar state, `Safe Exec: Show Recent Activity`, and `Safe Exec: Show Recent File Operations`.

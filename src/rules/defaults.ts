@@ -1,3 +1,4 @@
+import { DEFAULT_PROTECTED_COMMAND_RULES } from "../protectedCommandCatalog";
 import type { SafeExecRules } from "./types";
 
 const SHELL_STARTUP_PROTECTED_PATH_PATTERNS = [
@@ -176,23 +177,7 @@ export const DEFAULT_RULES: SafeExecRules = {
     },
     { pattern: "\\bSet-ExecutionPolicy\\b", description: "PowerShell execution policy change", risk: "high" }
   ],
-  protectedCommands: [
-    {
-      command: "workbench.action.terminal.runSelectedText",
-      description: "Run selected text in terminal",
-      risk: "high"
-    },
-    {
-      command: "workbench.action.tasks.runTask",
-      description: "Run a configured task",
-      risk: "medium"
-    },
-    {
-      command: "github.copilot.generate",
-      description: "AI code generation",
-      risk: "medium"
-    }
-  ],
+  protectedCommands: [...DEFAULT_PROTECTED_COMMAND_RULES],
   editHeuristics: {
     minChangedCharacters: 120,
     minAffectedLines: 8,

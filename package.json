@@ -32,6 +32,11 @@
     "onCommand:safeExec.runProtectedCommand",
     "onCommand:safeExec.proxy.workbench.action.terminal.runSelectedText",
     "onCommand:safeExec.proxy.workbench.action.tasks.runTask",
+    "onCommand:safeExec.proxy.notebook.execute",
+    "onCommand:safeExec.proxy.notebook.cell.execute",
+    "onCommand:safeExec.proxy.interactive.execute",
+    "onCommand:safeExec.proxy.workbench.extensions.installExtension",
+    "onCommand:safeExec.proxy.workbench.extensions.uninstallExtension",
     "onCommand:safeExec.proxy.github.copilot.generate"
   ],
   "contributes": {
@@ -68,7 +73,7 @@
       },
       {
         "command": "safeExec.installRecommendedKeybindings",
-        "title": "Safe Exec: Open Recommended Proxy Keybindings",
+        "title": "Safe Exec: Open Recommended Proxy And Wrapper Keybindings",
         "category": "Safe Exec"
       },
       {
@@ -107,6 +112,31 @@
         "category": "Safe Exec"
       },
       {
+        "command": "safeExec.proxy.notebook.execute",
+        "title": "Safe Exec: Proxy Run All Notebook Cells",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.notebook.cell.execute",
+        "title": "Safe Exec: Proxy Execute Notebook Cell",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.interactive.execute",
+        "title": "Safe Exec: Proxy Execute Interactive Input",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.workbench.extensions.installExtension",
+        "title": "Safe Exec: Proxy Install Extension",
+        "category": "Safe Exec"
+      },
+      {
+        "command": "safeExec.proxy.workbench.extensions.uninstallExtension",
+        "title": "Safe Exec: Proxy Uninstall Extension",
+        "category": "Safe Exec"
+      },
+      {
         "command": "safeExec.proxy.github.copilot.generate",
         "title": "Safe Exec: Proxy GitHub Copilot Generate",
         "category": "Safe Exec"
@@ -132,8 +162,8 @@
           },
           {
             "id": "safeExec.installProxyKeybindings",
-            "title": "Review recommended proxy keybindings",
-            "description": "Open your user keybindings.json beside a recommended Safe Exec proxy snippet. Safe Exec does not edit keybindings automatically.",
+            "title": "Review recommended proxy and wrapper keybindings",
+            "description": "Open your user keybindings.json beside recommended Safe Exec proxy and wrapper snippets. Safe Exec does not edit keybindings automatically.",
             "media": {
               "image": "media/status-keybindings.svg",
               "altText": "Illustrative Safe Exec status and keybinding guidance"
@@ -229,12 +259,18 @@
           "default": [
             "workbench.action.terminal.runSelectedText",
             "workbench.action.tasks.runTask",
-            "github.copilot.generate"
+            "notebook.execute",
+            "notebook.cell.execute",
+            "interactive.execute",
+            "workbench.extensions.installExtension",
+            "workbench.extensions.uninstallExtension",
+            "vscode.openFolder",
+            "vscode.newWindow"
           ],
           "items": {
             "type": "string"
           },
-          "description": "Additional command IDs that should require approval when executed through Safe Exec proxy or wrapper commands."
+          "description": "Automation-heavy command IDs that should require approval when executed through Safe Exec proxy or wrapper commands."
         },
         "safeExec.terminal.killStrategy": {
           "type": "string",

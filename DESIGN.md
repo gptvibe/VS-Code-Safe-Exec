@@ -176,8 +176,16 @@ Safe Exec intentionally uses explicit proxy and wrapper commands:
 
 - `safeExec.proxy.workbench.action.terminal.runSelectedText`
 - `safeExec.proxy.workbench.action.tasks.runTask`
-- `safeExec.proxy.github.copilot.generate`
+- `safeExec.proxy.notebook.execute`
+- `safeExec.proxy.notebook.cell.execute`
+- `safeExec.proxy.interactive.execute`
+- `safeExec.proxy.workbench.extensions.installExtension`
+- `safeExec.proxy.workbench.extensions.uninstallExtension`
 - `safeExec.runProtectedCommand`
+
+These built-in command IDs were verified against the VS Code Built-in Commands reference updated on March 25, 2026 and against the current VS Code 1.113.0 host used by the extension test suite.
+
+Wrapper-first commands such as `vscode.openFolder` and `vscode.newWindow` deliberately stay on `safeExec.runProtectedCommand` so the risky arguments remain explicit in keybindings, automation snippets, and approval previews.
 
 Flow:
 

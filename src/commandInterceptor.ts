@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 import type { AuditLog } from "./auditLog";
 import type { PermissionUI } from "./permissionUI";
+import {
+  EXPLICIT_PROXY_COMMAND_DEFINITIONS,
+  findProtectedCommandDefinition,
+  type ExplicitProxyCommandDefinition
+} from "./protectedCommandCatalog";
 import { findMatchingProtectedCommandRule } from "./rules";
 import type { CompiledRules, ProtectedCommandRule, RiskLevel } from "./rules";
 
@@ -19,27 +24,6 @@ interface ProxyDefinition {
   reason: string;
 }
 
-const PROXY_COMMANDS: ProxyDefinition[] = [
-  {
-    proxyCommand: "safeExec.proxy.workbench.action.terminal.runSelectedText",
-    targetCommand: "workbench.action.terminal.runSelectedText",
-    defaultRisk: "high",
-    reason: "This command can send editor text directly to an interactive terminal."
-  },
-  {
-    proxyCommand: "safeExec.proxy.workbench.action.tasks.runTask",
-    targetCommand: "workbench.action.tasks.runTask",
-    defaultRisk: "medium",
-    reason: "Tasks can execute workspace-defined automation or shell commands."
-  },
-  {
-    proxyCommand: "safeExec.proxy.github.copilot.generate",
-    targetCommand: "github.copilot.generate",
-    defaultRisk: "medium",
-    reason: "AI generation may create or trigger follow-on edits."
-  }
-];
-
 export class CommandInterceptor {
   private readonly executingTargets = new Set<string>();
 
@@ -48,10 +32,10 @@ export class CommandInterceptor {
   public register(): vscode.Disposable {
     const disposables: vscode.Disposable[] = [];
 
-    for (const proxy of PROXY_COMMANDS) {
+    for (const proxy of EXPLICIT_PROXY_COMMAND_DEFINITIONS) {
       disposables.push(
         vscode.commands.registerCommand(proxy.proxyCommand, async (...args: unknown[]) =>
-          this.runProtectedCommand(proxy.targetCommand, args, proxy)
+          this.runProtectedCommand(proxy.targetCommand, args, this.toProxyDefinition(proxy))
         )
       );
     }
@@ -59,11 +43,12 @@ export class CommandInterceptor {
     disposables.push(
       vscode.commands.registerCommand("safeExec.runProtectedCommand", async (...args: unknown[]) => {
         const { targetCommand, targetArgs } = this.parseWrapperArguments(args);
+        const commandDefinition = findProtectedCommandDefinition(targetCommand);
         return this.runProtectedCommand(targetCommand, targetArgs, {
           proxyCommand: "safeExec.runProtectedCommand",
           targetCommand,
-          defaultRisk: "medium",
-          reason: "This command was explicitly wrapped by Safe Exec."
+          defaultRisk: commandDefinition?.defaultRisk ?? "medium",
+          reason: commandDefinition?.reason ?? "This command was explicitly wrapped by Safe Exec."
         });
       })
     );
@@ -202,6 +187,15 @@ export class CommandInterceptor {
     return findMatchingProtectedCommandRule(targetCommand, this.options.getRules().protectedCommands, (pattern, error) => {
       this.log(`Ignoring invalid protected command pattern "${pattern}": ${error}`);
     });
+  }
+
+  private toProxyDefinition(definition: ExplicitProxyCommandDefinition): ProxyDefinition {
+    return {
+      proxyCommand: definition.proxyCommand,
+      targetCommand: definition.targetCommand,
+      defaultRisk: definition.defaultRisk,
+      reason: definition.reason
+    };
   }
 
   private log(message: string): void {

@@ -177,7 +177,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
       viewColumn: vscode.ViewColumn.Beside
     });
     void vscode.window.showInformationMessage(
-      "Safe Exec opened your keybindings.json alongside a recommended proxy snippet. Merge the entries you want manually; Safe Exec does not edit keybindings automatically."
+      "Safe Exec opened your keybindings.json alongside recommended proxy and wrapper snippets. Merge the entries you want manually; Safe Exec does not edit keybindings automatically."
     );
   };
 
@@ -190,8 +190,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<SafeEx
           action: "onboarding" as const
         },
         {
-          label: "Review Proxy Keybindings",
-          description: "Open your keybindings.json beside the recommended proxy snippet",
+          label: "Review Proxy And Wrapper Keybindings",
+          description: "Open your keybindings.json beside the recommended Safe Exec routing snippet",
           action: "keybindings" as const
         },
         {
